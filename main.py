@@ -14,12 +14,28 @@ app = FastAPI()
 
 @app.get("/")
 def home():
-    return {"status": "PRANA PCS Margin Annotator is 100% Active!"}
+    return {"status": "PRANA PCS Hindi Font Evaluator Active!"}
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML") if BOT_TOKEN else None
+
+# हिंदी (देवनागरी) फ़ॉन्ट डाउनलोड करना
+HINDI_FONT_PATH = "/tmp/NotoSansDevanagari-Regular.ttf"
+
+def ensure_hindi_font():
+    if not os.path.exists(HINDI_FONT_PATH):
+        try:
+            url = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari%5Bwdth%2Cwght%5D.ttf"
+            r = requests.get(url, timeout=15)
+            if r.status_code == 200:
+                with open(HINDI_FONT_PATH, "wb") as f:
+                    f.write(r.content)
+        except Exception as e:
+            print("Font Download Error:", e)
+
+ensure_hindi_font()
 
 ACTIVE_MODELS = [
     "gemini-3.6-flash",
@@ -44,22 +60,20 @@ def evaluate_with_gemini(images_b64, total_pages):
 
     इस उत्तर पुस्तिका का अत्यंत गंभीर और पृष्ठ-वार (Page by Page) मूल्यांकन करें:
     1. उत्तरों को पढ़कर पूर्णांक (Max Marks) और प्राप्तांक (Obtained Marks) दें।
-    2. प्रत्येक पृष्ठ के लिए 2 से 3 संक्षिप्त लाल-पेन निर्देश/टिप्पणियां (Margin Comments) दें जिन्हें कॉपी के साइड मार्जिन में लिखा जा सके (उदा. '✓ भूमिका स्पष्ट', '→ डेटा जोड़ें', '✓ विश्लेषण सही', '→ मैप/फ्लोचार्ट बनाएं')।
+    2. प्रत्येक पृष्ठ के लिए 2 से 3 संक्षिप्त लाल-पेन निर्देश/टिप्पणियां (Margin Comments) दें जिन्हें कॉपी के साइड मार्जिन में लिखा जा सके (उदा. '✓ भूमिका स्पष्ट', '→ UP डेटा जोड़ें', '✓ विश्लेषण सही', '→ मैप/फ्लोचार्ट बनाएं')।
     
     आउटपुट केवल और केवल इस JSON प्रारूप में दें:
     {{
-        "obtained_marks": 15.5,
+        "obtained_marks": 16.0,
         "max_marks": 24,
-        "feedback": "तीनों उत्तरों की संरचना अत्यधिक सुव्यवस्थित है। सरकारी योजनाओं का सटीक समावेश किया गया है।",
+        "feedback": "उत्तरों की संरचना अत्यधिक सुव्यवस्थित है। सरकारी योजनाओं का सटीक समावेश किया गया है।",
         "improvements": [
-            "उत्तर प्रदेश (UP) के विशेष संदर्भों और नलकूप घनत्व का उल्लेख करें।",
-            "सिंचाई और वर्षा के प्रश्न में UP का मानचित्र बनाएं।",
-            "निष्कर्षों में वे-फॉरवर्ड को अधिक भविष्योन्मुखी बनाएं।"
+            "उत्तर प्रदेश (UP) के विशेष संदर्भों का उल्लेख करें।",
+            "सिंचाई और वर्षा के प्रश्न में UP का मानचित्र बनाएं।"
         ],
         "page_annotations": [
             ["✓ भूमिका स्पष्ट व सटीक", "→ UP विशेष डेटा जोड़ें"],
-            ["✓ योजनाओं का अच्छा समावेश", "✓ प्रवाह ठीक है"],
-            ["→ निष्कर्ष को 2 पंक्ति और बढ़ाएं", "✓ प्रस्तुतीकरण उत्तम"]
+            ["✓ योजनाओं का अच्छा समावेश", "✓ प्रवाह ठीक है"]
         ]
     }}
     """
@@ -91,10 +105,12 @@ def evaluate_with_gemini(images_b64, total_pages):
     raise Exception(f"AI मूल्यांकन में समस्या: {last_err}")
 
 def create_rich_annotated_pdf(pdf_doc, eval_data):
-    """कॉपी के साइड मार्जिन में लाल पेन से निर्देश और स्टैम्प अंकित करना"""
+    """हिंदी फ़ॉन्ट के साथ साइड मार्जिन में लाल पेन से निर्देश लिखना"""
     obtained = eval_data.get("obtained_marks", 5.5)
     max_m = eval_data.get("max_marks", 8)
     page_notes = eval_data.get("page_annotations", [])
+    
+    font_file = HINDI_FONT_PATH if os.path.exists(HINDI_FONT_PATH) else None
     
     total_p = len(pdf_doc)
     
@@ -109,26 +125,26 @@ def create_rich_annotated_pdf(pdf_doc, eval_data):
             page.insert_text(fitz.Point(w - 230, 44), "PRANA PCS EVALUATED", fontsize=11, color=(0.85, 0, 0))
             page.insert_text(fitz.Point(w - 225, 70), f"Marks: {obtained} / {max_m}", fontsize=14, color=(0.85, 0, 0))
 
-        # 2. दाएँ साइड मार्जिन (Right Margin) में लाल पेन से टिप्पणियाँ
+        # 2. दाएँ साइड मार्जिन में हिंदी नोट्स
         notes = page_notes[idx] if idx < len(page_notes) else ["✓ विश्लेषण सही है", "→ प्रस्तुति में सुधार करें"]
         
         y_pos = 140
         for note in notes[:3]:
-            # लाल बॉक्स बॉर्डर
-            box = fitz.Rect(w - 145, y_pos, w - 10, y_pos + 48)
+            box = fitz.Rect(w - 150, y_pos, w - 10, y_pos + 50)
             page.draw_rect(box, color=(0.85, 0, 0), width=0.8, fill=(1, 0.96, 0.96))
             
-            # लाल टेक्स्ट
+            # हिंदी फ़ॉन्ट के साथ टेक्स्ट लिखें
             page.insert_textbox(
                 box,
                 note,
                 fontsize=9,
+                fontfile=font_file,
                 color=(0.85, 0, 0),
                 align=fitz.TEXT_ALIGN_CENTER
             )
             y_pos += 65
 
-        # 3. पेज के नीचे लाल पेन का अंक/टिक घेरा (Circle Score)
+        # 3. पेज के नीचे लाल अंक घेरा
         circle_center = fitz.Point(w - 60, h - 70)
         page.draw_circle(circle_center, 22, color=(0.85, 0, 0), width=1.5)
         page.insert_text(fitz.Point(w - 74, h - 64), f"✓ {obtained}", fontsize=11, color=(0.85, 0, 0))
@@ -201,10 +217,9 @@ if bot:
                 f"📝 <b>समीक्षा:</b> {feedback}\n\n"
                 f"💡 <b>सुझाव:</b>\n{imp_text}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>जांची हुई प्रमाणित कॉपी (मार्जिन नोट्स सहित) नीचे संलग्न है 👇</i>"
+                f"<i>जांची हुई प्रमाणित कॉपी (हिंदी मार्जिन नोट्स सहित) नीचे संलग्न है 👇</i>"
             )
 
-            # समृद्ध एनोटेटेड PDF जनरेट करना
             stamped_pdf = create_rich_annotated_pdf(pdf_doc, eval_result)
 
             bot.delete_message(chat_id, status_msg.message_id)
