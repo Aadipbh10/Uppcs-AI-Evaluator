@@ -1158,7 +1158,7 @@ def place_comment(
     anchor_x = (xmin + xmax) / 2 / 1000 * page_width
     anchor_y = (ymin + ymax) / 2 / 1000 * page_height
 
-    start_x = chosen_rect.x1 if chosen_side == 'right' else chosen_rect.x2
+    start_x = chosen_rect.x0 if chosen_side == 'right' else chosen_rect.x1
     start_y = chosen_rect.y0 + chosen_rect.height / 2
 
     draw_arrow(page, start_x, start_y, anchor_x, anchor_y)
