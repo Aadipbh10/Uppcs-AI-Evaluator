@@ -21,17 +21,15 @@ def health_check():
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML") if BOT_TOKEN else None
 
-# हाई-डिमांड से बचने के लिए मॉडल्स की फॉलबैक लिस्ट
+# एक्टिव मॉडल्स की प्राथमिकता सूची
 CANDIDATE_MODELS = [
-    "gemini-3.5-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
     "gemini-2.5-flash",
-    "gemini-2.5-pro"
+    "gemini-2.5-pro",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash"
 ]
 
 def evaluate_with_gemini_fallback(images_b64, total_pages):
-    """503 High Demand से बचने के लिए मल्टी-मॉडल ऑटोमैटिक फॉलबैक"""
     parts = []
     for b64 in images_b64:
         parts.append({
@@ -45,17 +43,17 @@ def evaluate_with_gemini_fallback(images_b64, total_pages):
     आप UPPCS मुख्य परीक्षा (Civil Services Mains) के वरिष्ठ एवं मुख्य परीक्षक हैं।
     उत्तर पुस्तिका के कुल पृष्ठ: {total_pages}
 
-    इस उत्तर पुस्तिका का अत्यंत निष्पक्ष, गंभीर और विस्तृत मूल्यांकन करें:
-    1. उत्तरों को पढ़कर पूर्णांक (Max Marks) और प्राप्तांक (Obtained Marks) तय करें।
+    इस उत्तर पुस्तिका का निष्पक्ष, गंभीर और विस्तृत मूल्यांकन करें:
+    1. उत्तरों को पढ़कर कुल पूर्णांक (Max Marks) और प्राप्तांक (Obtained Marks) तय करें।
     2. UP विशेष तथ्य, बजट, योजनाएं, आंकड़े, संरचना (भूमिका, मुख्य भाग, निष्कर्ष) और प्रस्तुति के आधार पर अंक दें।
     
     आउटपुट केवल और केवल इस JSON प्रारूप में दें:
     {{
         "obtained_marks": 5.5,
         "max_marks": 8,
-        "feedback": "उत्तर की संरचना सुव्यवस्थित है। भूमिका संक्षिप्त और सटीक है। मुख्य भाग में UP विशेष आंकड़ों का समावेश ठीक है।",
+        "feedback": "उत्तर की संरचना सुव्यवस्थित है। भूमिका संक्षिप्त और सटीक है। मुख्य भाग में UP विशेष आंकड़ों का अच्छा समावेश किया गया है।",
         "improvements": [
-            "निष्कर्ष को 2-3 पंक्तियों में और अधिक भविष्योन्मुखी बनाएं।",
+            "निष्कर्ष को 2-3 पंक्तियों में और अधिक भविष्योन्मुखी (Way Forward) बनाएं।",
             "UP सरकार की नवीनतम योजनाओं का सटीक संदर्भ दें।",
             "मुख्य बिंदुओं को रेखांकित (underline) करें।"
         ]
@@ -69,7 +67,6 @@ def evaluate_with_gemini_fallback(images_b64, total_pages):
     }
 
     last_error = ""
-    # एक के बाद एक मॉडल्स पर स्वतः प्रयास करना
     for model_name in CANDIDATE_MODELS:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         try:
@@ -80,7 +77,6 @@ def evaluate_with_gemini_fallback(images_b64, total_pages):
                 clean_text = raw_text.replace("```json", "").replace("```", "").strip()
                 return json.loads(clean_text)
             elif res.status_code in [503, 429]:
-                # अगर मॉडल व्यस्त है, तो 1 सेकंड रुककर अगले मॉडल पर जाएँ
                 time.sleep(1)
                 continue
             else:
@@ -89,7 +85,7 @@ def evaluate_with_gemini_fallback(images_b64, total_pages):
             last_error = str(e)
             continue
             
-    raise Exception(f"सभी AI मॉडल्स व्यस्त थे। विवरण: {last_error}")
+    raise Exception(f"AI मूल्यांकन में समस्या: {last_error}")
 
 def create_stamped_pdf(pdf_doc, obtained, max_m):
     first_page = pdf_doc[0]
@@ -198,6 +194,13 @@ if bot:
 
 def run_telebot():
     if bot:
-        bot.infinity_polling(timeout=20, long_polling_timeout=20)
+        # पुराने किसी भी कनेक्शन/वेबहूक को रीसेट करना
+        try:
+            bot.remove_webhook()
+            time.sleep(2)
+        except Exception:
+            pass
+        # बिना क्रैश हुए Polling चलाना
+        bot.infinity_polling(timeout=20, long_polling_timeout=20, skip_pending=True)
 
 threading.Thread(target=run_telebot, daemon=True).start()
