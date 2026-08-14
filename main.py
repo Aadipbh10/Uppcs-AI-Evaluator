@@ -262,6 +262,7 @@ Evaluation ऐसा दिखना चाहिए जैसे किसी �
 इसलिए:
 
 ✓ अच्छे तथ्य/उदाहरण/डेटा/argument पर red tick लगाएँ।
+✓ जहाँ सामग्री पर्याप्त हो वहाँ प्रत्येक page पर सामान्यतः 3-4 substantive comments दें।
 ✓ गलत तथ्य, गलत terminology, inappropriate wording,
   unsupported claim या स्पष्ट conceptual error पर red circle लगाएँ।
 ✓ जहाँ सुधार आवश्यक है वहाँ छोटा लेकिन substantive examiner comment दें।
@@ -269,6 +270,7 @@ Evaluation ऐसा दिखना चाहिए जैसे किसी �
 ✓ प्रत्येक page की comments कुल लगभग 15-40 शब्द की हों।
 ✓ Comments answer के relevant हिस्से के पास लगाने योग्य हों।
 ✓ अनावश्यक रूप से हर लाइन पर annotation न करें।
+✓ Comments बड़े लाल text में सीधे margin में हों; कोई box, card, sticker या background न हो।
 ✓ केवल महत्वपूर्ण और वास्तविक mistakes/high-value points चुनें।
 
 ============================================================
@@ -681,120 +683,48 @@ def wrap_text(
 
 def make_comment_badge(
     text,
-    width=1400,
-    font_size=52
+    width=1500,
+    font_size=58
 ):
+    """
+    Drishti-style examiner comment:
+    No box, no background, large red text.
+    """
+    fnt = font(font_size)
+    padding = 8
 
-    fnt = font(
-        font_size
-    )
+    temp = Image.new("RGBA", (width, 1600), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(temp)
 
-    padding = 40
+    lines = wrap_text(draw, text, fnt, width - 2 * padding)
 
-    temp = Image.new(
-        "RGB",
-        (width, 1400),
-        (255, 250, 250)
-    )
-
-    draw = ImageDraw.Draw(
-        temp
-    )
-
-    lines = wrap_text(
-        draw,
-        text,
-        fnt,
-        width - 2 * padding
-    )
-
-    heights = []
-
+    line_heights = []
     for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=fnt)
+        line_heights.append(bbox[3] - bbox[1])
 
-        bbox = draw.textbbox(
-            (0, 0),
-            line,
-            font=fnt
-        )
-
-        heights.append(
-            bbox[3] - bbox[1]
-        )
-
-    line_gap = 18
-
+    line_gap = 14
     height = max(
-        220,
-        sum(heights)
-        + line_gap * (
-            len(lines) - 1
-        )
+        110,
+        sum(line_heights) + line_gap * max(0, len(lines) - 1)
         + 2 * padding
     )
 
-    image = Image.new(
-        "RGB",
-        (width, height),
-        (255, 250, 250)
-    )
-
-    draw = ImageDraw.Draw(
-        image
-    )
-
-    draw.rounded_rectangle(
-        (
-            5,
-            5,
-            width - 6,
-            height - 6
-        ),
-        radius=24,
-        outline=(170, 0, 0),
-        width=7
-    )
+    image = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(image)
 
     y = padding
-
-    for line, line_height in zip(
-        lines,
-        heights
-    ):
-
-        bbox = draw.textbbox(
-            (0, 0),
-            line,
-            font=fnt
-        )
-
-        text_width = (
-            bbox[2] - bbox[0]
-        )
-
-        x = (
-            width - text_width
-        ) // 2
-
+    for line, line_height in zip(lines, line_heights):
         draw.text(
-            (x, y),
+            (padding, y),
             line,
             font=fnt,
-            fill=(160, 0, 0)
+            fill=(145, 0, 0, 255)
         )
-
-        y += (
-            line_height
-            + line_gap
-        )
+        y += line_height + line_gap
 
     output = io.BytesIO()
-
-    image.save(
-        output,
-        "PNG"
-    )
-
+    image.save(output, "PNG")
     return output.getvalue()
 
 
@@ -1137,123 +1067,87 @@ def place_comment(
     page_height,
     occupied
 ):
-
+    """
+    Drishti-style margin annotation:
+    large red text directly on the page, no box/card.
+    """
     png = make_comment_badge(
         text,
-        width=1400,
-        font_size=52
+        width=1500,
+        font_size=58
     )
 
-    box_width = min(
-        190,
-        page_width * 0.27
-    )
+    box_width = min(210, page_width * 0.29)
 
-    box_height = min(
-        250,
-        page_height * 0.32
-    )
+    words = len(str(text).split())
+    line_count = max(1, (words + 5) // 6)
+    box_height = min(175, max(72, 42 * line_count))
 
     if side == "left":
-
-        x1 = 5
+        x1 = 4
         x2 = x1 + box_width
-
     else:
-
-        x2 = page_width - 5
+        x2 = page_width - 4
         x1 = x2 - box_width
 
-    anchor_y = (
-        anchor_box[0]
-        / 1000
-        * page_height
-    )
+    anchor_y = anchor_box[0] / 1000 * page_height
 
-    y1 = max(
-        90,
-        min(
-            page_height
-            - box_height
-            - 10,
-            anchor_y - 20
-        )
-    )
-
-    candidates = [
-        y1,
-        max(
-            90,
-            y1 - 270
-        ),
-        min(
-            page_height
-            - box_height
-            - 10,
-            y1 + 270
-        )
+    preferred = [
+        anchor_y - box_height / 2,
+        anchor_y - 105,
+        anchor_y + 105,
+        anchor_y - 210,
+        anchor_y + 210
     ]
 
-    chosen = candidates[0]
-
-    for candidate in candidates:
-
-        rect = fitz.Rect(
-            x1,
-            candidate,
-            x2,
-            candidate + box_height
+    chosen = None
+    for candidate in preferred:
+        candidate = max(
+            8,
+            min(page_height - box_height - 8, candidate)
         )
 
-        if all(
-            not rect.intersects(
-                old
-            )
-            for old in occupied
-        ):
+        rect = fitz.Rect(
+            x1, candidate,
+            x2, candidate + box_height
+        )
 
+        if all(not rect.intersects(old) for old in occupied):
             chosen = candidate
             break
 
+    if chosen is None:
+        chosen = max(
+            8,
+            min(
+                page_height - box_height - 8,
+                anchor_y - box_height / 2
+            )
+        )
+
     rect = fitz.Rect(
-        x1,
-        chosen,
-        x2,
-        chosen + box_height
+        x1, chosen,
+        x2, chosen + box_height
     )
 
     page.insert_image(
         rect,
         stream=png,
-        keep_proportion=True
+        keep_proportion=True,
+        overlay=True
     )
 
     ymin, xmin, ymax, xmax = anchor_box
 
     anchor_x = (
-        (xmin + xmax)
-        / 2
-        / 1000
-        * page_width
+        (xmin + xmax) / 2 / 1000 * page_width
     )
-
     anchor_y = (
-        (ymin + ymax)
-        / 2
-        / 1000
-        * page_height
+        (ymin + ymax) / 2 / 1000 * page_height
     )
 
-    start_x = (
-        x2
-        if side == "left"
-        else x1
-    )
-
-    start_y = (
-        chosen
-        + box_height / 2
-    )
+    start_x = x2 if side == "left" else x1
+    start_y = chosen + box_height / 2
 
     draw_arrow(
         page,
@@ -1410,7 +1304,7 @@ def annotate_pdf(
             ) == page_number
         ]
 
-        for comment in comments[:2]:
+        for comment in comments[:4]:
 
             text = str(
                 comment.get(
