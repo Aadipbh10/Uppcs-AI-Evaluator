@@ -3,6 +3,8 @@ import io
 import json
 import base64
 import tempfile
+import uuid
+from datetime import datetime, timezone
 import requests
 from pathlib import Path
 
@@ -10,6 +12,13 @@ from fastapi import FastAPI, Request
 import telebot
 from PIL import Image, ImageDraw, ImageFont
 import pymupdf as fitz
+
+# PostgreSQL persistence layer (keeps the existing evaluator/rendering code intact)
+from sqlalchemy import (
+    create_engine, Column, String, Integer, Float, DateTime, Text, Boolean,
+    ForeignKey, JSON, Index
+)
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 
 # ============================================================
@@ -50,6 +59,280 @@ FONT_URL = (
 # ============================================================
 
 PENDING = {}
+
+
+# ============================================================
+# POSTGRESQL DATABASE FOUNDATION
+# ============================================================
+
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+DB_ENABLED = bool(DATABASE_URL)
+engine = None
+SessionLocal = None
+Base = declarative_base()
+
+if DB_ENABLED:
+    try:
+        engine = create_engine(
+            DATABASE_URL,
+            pool_pre_ping=True,
+            pool_recycle=300,
+            connect_args={"connect_timeout": 10},
+        )
+        SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        print("DATABASE CONFIGURED: PostgreSQL")
+    except Exception as e:
+        DB_ENABLED = False
+        print("DATABASE CONFIG ERROR:", e)
+
+
+class DBUser(Base):
+    __tablename__ = "users"
+    telegram_user_id = Column(String(64), primary_key=True)
+    username = Column(String(255), nullable=True)
+    first_name = Column(String(255), nullable=True)
+    last_name = Column(String(255), nullable=True)
+    is_allowed = Column(Boolean, default=True, nullable=False)
+    is_blocked = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False)
+
+
+class DBGroup(Base):
+    __tablename__ = "telegram_groups"
+    telegram_group_id = Column(String(64), primary_key=True)
+    title = Column(String(255), nullable=True)
+    group_type = Column(String(50), nullable=True)
+    is_allowed = Column(Boolean, default=False, nullable=False)
+    is_blocked = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False)
+
+
+class DBSubmission(Base):
+    __tablename__ = "submissions"
+    id = Column(String(64), primary_key=True)
+    telegram_user_id = Column(String(64), nullable=False, index=True)
+    telegram_chat_id = Column(String(64), nullable=True, index=True)
+    chat_type = Column(String(50), nullable=True)
+    group_id = Column(String(64), nullable=True, index=True)
+    paper = Column(String(10), nullable=False, index=True)
+    original_filename = Column(Text, nullable=False)
+    evaluated_filename = Column(Text, nullable=False)
+    copy_language = Column(String(20), nullable=True)
+    total_obtained_marks = Column(Float, nullable=True)
+    total_max_marks = Column(Float, nullable=True)
+    overall_feedback = Column(Text, nullable=True)
+    status = Column(String(30), nullable=False, default="completed")
+    created_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class DBQuestion(Base):
+    __tablename__ = "submission_questions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    submission_id = Column(String(64), ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False, index=True)
+    question_number = Column(Integer, nullable=False)
+    start_page = Column(Integer, nullable=False)
+    end_page = Column(Integer, nullable=False)
+    pages_used = Column(Integer, nullable=False)
+    max_marks = Column(Float, nullable=False)
+    obtained_marks = Column(Float, nullable=False)
+    demand_parts = Column(JSON, nullable=True)
+    fulfilled_parts = Column(JSON, nullable=True)
+    skipped_parts = Column(JSON, nullable=True)
+    end_page_comment = Column(Text, nullable=True)
+
+
+class DBPageComment(Base):
+    __tablename__ = "page_comments"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    submission_id = Column(String(64), ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False, index=True)
+    page = Column(Integer, nullable=False)
+    color = Column(String(20), nullable=True)
+    comment = Column(Text, nullable=False)
+    placement_box = Column(JSON, nullable=True)
+    anchor = Column(JSON, nullable=True)
+
+
+class DBAnnotation(Base):
+    __tablename__ = "annotations"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    submission_id = Column(String(64), ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False, index=True)
+    page = Column(Integer, nullable=False)
+    annotation_type = Column(String(20), nullable=False)
+    color = Column(String(20), nullable=True)
+    exact_text = Column(Text, nullable=True)
+    reason = Column(Text, nullable=True)
+    box_2d = Column(JSON, nullable=True)
+
+
+Index("ix_submissions_user_paper_date", DBSubmission.telegram_user_id, DBSubmission.paper, DBSubmission.created_at)
+
+
+def init_database():
+    if not DB_ENABLED or engine is None:
+        print("DATABASE DISABLED: DATABASE_URL not configured")
+        return False
+    try:
+        Base.metadata.create_all(bind=engine)
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+        print("DATABASE READY: PostgreSQL")
+        return True
+    except Exception as e:
+        print("DATABASE INIT ERROR:", e)
+        return False
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
+
+
+def save_user_and_chat(message):
+    if not DB_ENABLED or SessionLocal is None:
+        return
+    session = SessionLocal()
+    try:
+        now = _utcnow()
+        user = getattr(message, "from_user", None)
+        user_id = str(getattr(user, "id", ""))
+        if user_id:
+            row = session.get(DBUser, user_id)
+            if row is None:
+                row = DBUser(telegram_user_id=user_id, created_at=now, last_seen_at=now)
+                session.add(row)
+            row.username = getattr(user, "username", None)
+            row.first_name = getattr(user, "first_name", None)
+            row.last_name = getattr(user, "last_name", None)
+            row.last_seen_at = now
+
+        chat = getattr(message, "chat", None)
+        chat_id = str(getattr(chat, "id", ""))
+        chat_type = getattr(chat, "type", None)
+        if chat_id and chat_type in ("group", "supergroup"):
+            group = session.get(DBGroup, chat_id)
+            if group is None:
+                group = DBGroup(
+                    telegram_group_id=chat_id,
+                    title=getattr(chat, "title", None),
+                    group_type=chat_type,
+                    created_at=now,
+                    last_seen_at=now,
+                )
+                session.add(group)
+            group.title = getattr(chat, "title", None)
+            group.last_seen_at = now
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        print("DATABASE USER SAVE ERROR:", e)
+    finally:
+        session.close()
+
+
+def save_evaluation_to_database(message, item, paper, result, evaluated_filename):
+    # PDF delivery is never blocked by a database error.
+    if not DB_ENABLED or SessionLocal is None:
+        return None
+    session = SessionLocal()
+    submission_id = str(uuid.uuid4())
+    try:
+        now = _utcnow()
+        user = getattr(message, "from_user", None)
+        chat = getattr(message, "chat", None)
+        user_id = str(getattr(user, "id", "")) or "unknown"
+        chat_id = str(getattr(chat, "id", "")) or None
+        chat_type = getattr(chat, "type", None)
+        group_id = chat_id if chat_type in ("group", "supergroup") else None
+
+        submission = DBSubmission(
+            id=submission_id,
+            telegram_user_id=user_id,
+            telegram_chat_id=chat_id,
+            chat_type=chat_type,
+            group_id=group_id,
+            paper=paper,
+            original_filename=str(item.get("filename", "submission.pdf")),
+            evaluated_filename=evaluated_filename,
+            copy_language=str(result.get("copy_language") or result.get("language") or "")[:20] or None,
+            total_obtained_marks=float(result.get("total_obtained_marks", 0) or 0),
+            total_max_marks=float(result.get("total_max_marks", 0) or 0),
+            overall_feedback=str(result.get("overall_feedback", "")),
+            status="completed",
+            created_at=now,
+            completed_at=now,
+        )
+        session.add(submission)
+
+        for q in result.get("questions", []):
+            session.add(DBQuestion(
+                submission_id=submission_id,
+                question_number=int(q.get("question_number", 0)),
+                start_page=int(q.get("start_page", 1)),
+                end_page=int(q.get("end_page", 1)),
+                pages_used=int(q.get("pages_used", 1)),
+                max_marks=float(q.get("max_marks", 0) or 0),
+                obtained_marks=float(q.get("obtained_marks", 0) or 0),
+                demand_parts=q.get("demand_parts", []),
+                fulfilled_parts=q.get("fulfilled_parts", []),
+                skipped_parts=q.get("skipped_parts", []),
+                end_page_comment=str(q.get("end_page_comment", "")),
+            ))
+
+        for c in result.get("page_comments", []):
+            session.add(DBPageComment(
+                submission_id=submission_id,
+                page=int(c.get("page", 1) or 1),
+                color=str(c.get("color", "red")),
+                comment=str(c.get("comment", "")),
+                placement_box=c.get("placement_box"),
+                anchor=c.get("anchor"),
+            ))
+
+        for a in result.get("annotations", []):
+            session.add(DBAnnotation(
+                submission_id=submission_id,
+                page=int(a.get("page", 1) or 1),
+                annotation_type=str(a.get("type", "good")),
+                color=str(a.get("color", "green")),
+                exact_text=str(a.get("exact_text", "")),
+                reason=str(a.get("reason", "")),
+                box_2d=a.get("box_2d"),
+            ))
+
+        session.commit()
+        print(f"DATABASE SAVED: submission_id={submission_id}")
+        return submission_id
+    except Exception as e:
+        session.rollback()
+        print("DATABASE EVALUATION SAVE ERROR:", e)
+        return None
+    finally:
+        session.close()
+
+
+def get_database_summary():
+    if not DB_ENABLED or SessionLocal is None:
+        return {"database": "disabled"}
+    session = SessionLocal()
+    try:
+        return {
+            "database": "postgresql",
+            "users": session.query(DBUser).count(),
+            "groups": session.query(DBGroup).count(),
+            "submissions": session.query(DBSubmission).count(),
+            "completed_submissions": session.query(DBSubmission).filter(DBSubmission.status == "completed").count(),
+        }
+    except Exception as e:
+        return {"database": "error", "error": str(e)[:200]}
+    finally:
+        session.close()
 
 
 # ============================================================
@@ -325,6 +608,7 @@ def ask_paper(message):
 def startup():
 
     ensure_font()
+    init_database()
 
     print(
         "AVAILABLE GEMINI MODELS CONFIGURED:",
@@ -352,11 +636,13 @@ def startup():
 @app.get("/")
 def home():
 
-    return {
+    data = {
         "status": "PRANA PCS AI Evaluator Active",
         "font": os.path.exists(FONT_PATH),
         "models": MODELS
     }
+    data.update(get_database_summary())
+    return data
 
 
 @app.get("/api/model-status")
@@ -3250,6 +3536,8 @@ if bot:
 
         try:
 
+            save_user_and_chat(message)
+
             if message.content_type == "document":
 
                 file_info = bot.get_file(
@@ -3443,6 +3731,16 @@ if bot:
                 f"{original_stem}_Evaluated.pdf"
             )
 
+            # Save complete evaluation for Mini App/Admin Panel.
+            # If PostgreSQL fails, the student still receives the evaluated PDF.
+            save_evaluation_to_database(
+                message,
+                item,
+                paper,
+                result,
+                evaluated_filename
+            )
+
             bot.send_document(
                 chat_id,
                 final_pdf,
@@ -3480,6 +3778,45 @@ if bot:
                     "⚠️ मूल्यांकन में समस्या:\n"
                     f"{str(e)[:300]}"
                 )
+
+
+# ============================================================
+# DATABASE HEALTH / STATISTICS API
+# ============================================================
+
+@app.get("/api/health")
+def api_health():
+    return get_database_summary()
+
+
+@app.get("/api/stats")
+def api_stats():
+    if not DB_ENABLED or SessionLocal is None:
+        return {"ok": False, "database": "disabled"}
+    session = SessionLocal()
+    try:
+        rows = session.query(DBSubmission).all()
+        by_paper = {}
+        total_obtained = 0.0
+        total_max = 0.0
+        for row in rows:
+            bucket = by_paper.setdefault(row.paper, {"submissions": 0, "obtained": 0.0, "max": 0.0})
+            bucket["submissions"] += 1
+            bucket["obtained"] += float(row.total_obtained_marks or 0)
+            bucket["max"] += float(row.total_max_marks or 0)
+            total_obtained += float(row.total_obtained_marks or 0)
+            total_max += float(row.total_max_marks or 0)
+        return {
+            "ok": True,
+            "total_submissions": len(rows),
+            "total_obtained": round(total_obtained, 1),
+            "total_max": round(total_max, 1),
+            "by_paper": by_paper,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
+    finally:
+        session.close()
 
 
 # ============================================================
