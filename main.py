@@ -3,9 +3,7 @@ import io
 import json
 import time
 import base64
-import threading
 import requests
-from fastapi import FastAPI
 import telebot
 from PIL import Image
 import pymupdf as fitz
@@ -13,50 +11,35 @@ import pymupdf as fitz
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
-app = FastAPI()
+if not BOT_TOKEN:
+    print("ERROR: BOT_TOKEN is missing!")
+    exit(1)
 
-@app.get("/")
-def health_check():
-    return {"status": "PRANA PCS Dynamic AI Evaluator is 100% Active!"}
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML") if BOT_TOKEN else None
-
-def get_live_gemini_models():
-    """आपकी API Key के लिए Google पर लाइव उपलब्ध सभी मॉडल्स की रीयल-टाइम लिस्ट"""
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            models = [
-                m['name'] for m in data.get('models', [])
-                if 'generateContent' in m.get('supportedGenerationMethods', [])
-            ]
-            # Flash मॉडल्स को प्राथमिकता दें
-            flash_models = [m for m in models if 'flash' in m.lower()]
-            other_models = [m for m in models if 'flash' not in m.lower()]
-            return flash_models + other_models
-    except Exception:
-        pass
-    return ["models/gemini-2.5-flash", "models/gemini-2.0-flash", "models/gemini-1.5-flash"]
+# आधिकारिक एवं सक्रिय Gemini मॉडल्स (प्राथमिकता क्रम में)
+ACTIVE_MODELS = [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash"
+]
 
 def evaluate_with_gemini(images_b64, total_pages):
-    live_models = get_live_gemini_models()
-    
     parts = []
     for b64 in images_b64:
         parts.append({
-            "inlineData": {
-                "mimeType": "image/jpeg",
+            "inline_data": {
+                "mime_type": "image/jpeg",
                 "data": b64
             }
         })
     
     prompt = f"""
-    आप UPPCS मुख्य परीक्षा (Civil Services Mains) के वरिष्ठ परीक्षक हैं।
-    कुल पृष्ठ संख्या: {total_pages}
+    आप UPPCS मुख्य परीक्षा (Civil Services Mains) के वरिष्ठ एवं मुख्य परीक्षक हैं।
+    उत्तर पुस्तिका के कुल पृष्ठ संख्या: {total_pages}
 
-    इस उत्तर पुस्तिका का अत्यंत निष्पक्ष, गंभीर और विस्तृत मूल्यांकन करें:
+    इस उत्तर पुस्तिका का निष्पक्ष, गंभीर और विस्तृत मूल्यांकन करें:
     1. उत्तरों को पढ़कर पूर्णांक (Max Marks) और प्राप्तांक (Obtained Marks) दें।
     2. UP विशेष तथ्य, बजट, योजनाएं, आंकड़े, संरचना (भूमिका, मुख्य भाग, निष्कर्ष) और प्रस्तुति के आधार पर अंक दें।
     
@@ -76,24 +59,25 @@ def evaluate_with_gemini(images_b64, total_pages):
 
     payload = {
         "contents": [{"parts": parts}],
-        "generationConfig": {"responseMimeType": "application/json"}
+        "generationConfig": {"response_mime_type": "application/json"}
     }
 
     last_err = ""
-    for model_resource in live_models:
-        clean_model = model_resource if model_resource.startswith("models/") else f"models/{model_resource}"
-        url = f"https://generativelanguage.googleapis.com/v1beta/{clean_model}:generateContent?key={GEMINI_API_KEY}"
+    for model_name in ACTIVE_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         try:
-            res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=40)
+            res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=35)
             if res.status_code == 200:
-                raw_text = res.json()['candidates'][0]['content']['parts'][0]['text']
+                resp_json = res.json()
+                raw_text = resp_json['candidates'][0]['content']['parts'][0]['text']
                 clean_text = raw_text.replace("```json", "").replace("```", "").strip()
                 return json.loads(clean_text)
             elif res.status_code in [503, 429]:
+                # यदि मॉडल व्यस्त है तो अगले 3.x मॉडल पर जाएँ
                 time.sleep(1)
                 continue
             else:
-                last_err = f"{clean_model}: {res.text[:80]}"
+                last_err = f"{model_name} ({res.status_code}): {res.text[:80]}"
         except Exception as e:
             last_err = str(e)
             continue
@@ -120,45 +104,33 @@ def create_stamped_pdf(pdf_doc, obtained, max_m):
     out.seek(0)
     return out
 
-if bot:
-    @bot.message_handler(commands=['start', 'help'])
-    def send_welcome(message):
-        bot.reply_to(
-            message,
-            "🏛️ <b>PRANA PCS AI Mains Evaluator</b>\n\n"
-            "नमस्ते! अपनी उत्तर पुस्तिका की <b>PDF फ़ाइल</b> या <b>फ़ोटो</b> भेजें।"
-        )
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    bot.reply_to(
+        message,
+        "🏛️ <b>PRANA PCS AI Mains Evaluator</b>\n\n"
+        "नमस्ते! अपनी उत्तर पुस्तिका की <b>PDF फ़ाइल</b> या <b>फ़ोटो</b> भेजें।"
+    )
 
-    @bot.message_handler(content_types=['document', 'photo'])
-    def handle_answer_sheet(message):
-        chat_id = message.chat.id
-        status_msg = bot.reply_to(message, "⏳ <b>कॉपी प्राप्त हो गई है।</b>\nPRANA PCS AI द्वारा मूल्यांकन चल रहा है...")
-        
-        try:
-            pdf_doc = fitz.open()
-            images_b64 = []
+@bot.message_handler(content_types=['document', 'photo'])
+def handle_answer_sheet(message):
+    chat_id = message.chat.id
+    status_msg = bot.reply_to(message, "⏳ <b>कॉपी प्राप्त हो गई है।</b>\nPRANA PCS AI द्वारा मूल्यांकन चल रहा है...")
+    
+    try:
+        pdf_doc = fitz.open()
+        images_b64 = []
 
-            if message.content_type == 'document':
-                file_info = bot.get_file(message.document.file_id)
-                downloaded_file = bot.download_file(file_info.file_path)
-                
-                if message.document.file_name.lower().endswith(".pdf"):
-                    pdf_doc = fitz.open(stream=downloaded_file, filetype="pdf")
-                    for page in pdf_doc:
-                        # 60 DPI - सुपर लाइटवेट और फ़ास्ट प्रोसेसिंग
-                        pix = page.get_pixmap(dpi=60)
-                        images_b64.append(base64.b64encode(pix.tobytes("jpeg")).decode("utf-8"))
-                else:
-                    img = Image.open(io.BytesIO(downloaded_file)).convert("RGB")
-                    img_stream = io.BytesIO()
-                    img.save(img_stream, format="JPEG", quality=70)
-                    images_b64.append(base64.b64encode(img_stream.getvalue()).decode("utf-8"))
-                    page = pdf_doc.new_page(width=img.width, height=img.height)
-                    page.insert_image(page.rect, stream=img_stream.getvalue())
-
-            elif message.content_type == 'photo':
-                file_info = bot.get_file(message.photo[-1].file_id)
-                downloaded_file = bot.download_file(file_info.file_path)
+        if message.content_type == 'document':
+            file_info = bot.get_file(message.document.file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+            
+            if message.document.file_name.lower().endswith(".pdf"):
+                pdf_doc = fitz.open(stream=downloaded_file, filetype="pdf")
+                for page in pdf_doc:
+                    pix = page.get_pixmap(dpi=60)
+                    images_b64.append(base64.b64encode(pix.tobytes("jpeg")).decode("utf-8"))
+            else:
                 img = Image.open(io.BytesIO(downloaded_file)).convert("RGB")
                 img_stream = io.BytesIO()
                 img.save(img_stream, format="JPEG", quality=70)
@@ -166,50 +138,58 @@ if bot:
                 page = pdf_doc.new_page(width=img.width, height=img.height)
                 page.insert_image(page.rect, stream=img_stream.getvalue())
 
-            total_pages = len(pdf_doc)
+        elif message.content_type == 'photo':
+            file_info = bot.get_file(message.photo[-1].file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+            img = Image.open(io.BytesIO(downloaded_file)).convert("RGB")
+            img_stream = io.BytesIO()
+            img.save(img_stream, format="JPEG", quality=70)
+            images_b64.append(base64.b64encode(img_stream.getvalue()).decode("utf-8"))
+            page = pdf_doc.new_page(width=img.width, height=img.height)
+            page.insert_image(page.rect, stream=img_stream.getvalue())
 
-            eval_result = evaluate_with_gemini(images_b64, total_pages)
-            
-            obtained = eval_result.get("obtained_marks", 5.5)
-            max_m = eval_result.get("max_marks", 8)
-            feedback = eval_result.get("feedback", "मूल्यांकन संपन्न हुआ।")
-            improvements = eval_result.get("improvements", [])
+        total_pages = len(pdf_doc)
 
-            imp_text = "\n".join([f"• {item}" for item in improvements])
-            result_caption = (
-                f"🏛️ <b>PRANA PCS - मूल्यांकन रिपोर्ट</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎯 <b>कुल प्राप्तांक:</b> <code>{obtained} / {max_m}</code>\n\n"
-                f"📝 <b>समीक्षा:</b> {feedback}\n\n"
-                f"💡 <b>सुझाव:</b>\n{imp_text}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>जांची हुई कॉपी नीचे संलग्न है 👇</i>"
-            )
+        eval_result = evaluate_with_gemini(images_b64, total_pages)
+        
+        obtained = eval_result.get("obtained_marks", 5.5)
+        max_m = eval_result.get("max_marks", 8)
+        feedback = eval_result.get("feedback", "मूल्यांकन संपन्न हुआ।")
+        improvements = eval_result.get("improvements", [])
 
-            stamped_pdf = create_stamped_pdf(pdf_doc, obtained, max_m)
+        imp_text = "\n".join([f"• {item}" for item in improvements])
+        result_caption = (
+            f"🏛️ <b>PRANA PCS - मूल्यांकन रिपोर्ट</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 <b>कुल प्राप्तांक:</b> <code>{obtained} / {max_m}</code>\n\n"
+            f"📝 <b>समीक्षा:</b> {feedback}\n\n"
+            f"💡 <b>सुझाव:</b>\n{imp_text}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>जांची हुई कॉपी नीचे संलग्न है 👇</i>"
+        )
 
-            bot.delete_message(chat_id, status_msg.message_id)
-            bot.send_document(
-                chat_id=chat_id,
-                document=stamped_pdf,
-                visible_file_name="Evaluated_Copy_PranaPCS.pdf",
-                caption=result_caption
-            )
+        stamped_pdf = create_stamped_pdf(pdf_doc, obtained, max_m)
 
-        except Exception as e:
-            bot.edit_message_text(
-                f"⚠️ मूल्यांकन में समस्या: {str(e)[:150]}\nकृपया स्पष्ट PDF या फोटो पुनः भेजें।",
-                chat_id=chat_id,
-                message_id=status_msg.message_id
-            )
+        bot.delete_message(chat_id, status_msg.message_id)
+        bot.send_document(
+            chat_id=chat_id,
+            document=stamped_pdf,
+            visible_file_name="Evaluated_Copy_PranaPCS.pdf",
+            caption=result_caption
+        )
 
-def run_telebot():
-    if bot:
-        try:
-            bot.remove_webhook()
-            time.sleep(2)
-        except Exception:
-            pass
-        bot.infinity_polling(timeout=15, long_polling_timeout=15, skip_pending=True)
+    except Exception as e:
+        bot.edit_message_text(
+            f"⚠️ मूल्यांकन में समस्या: {str(e)[:150]}\nकृपया स्पष्ट PDF या फोटो पुनः भेजें।",
+            chat_id=chat_id,
+            message_id=status_msg.message_id
+        )
 
-threading.Thread(target=run_telebot, daemon=True).start()
+if __name__ == "__main__":
+    print("Starting PRANA PCS Bot...")
+    try:
+        bot.remove_webhook()
+    except Exception:
+        pass
+    time.sleep(5)
+    bot.infinity_polling(timeout=15, long_polling_timeout=15, skip_pending=True)
