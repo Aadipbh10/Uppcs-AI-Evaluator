@@ -34,7 +34,7 @@
       </select>
     </div>
 
-    <!-- Upload Area: Supports Single/Multiple Images OR Full PDF up to 55 pages -->
+    <!-- Upload Area -->
     <div class="bg-slate-800 p-6 rounded-xl border-2 border-dashed border-slate-600 text-center">
       <input type="file" id="copyInput" accept="application/pdf,image/*" multiple class="hidden" onchange="handleFiles()">
       <label for="copyInput" class="cursor-pointer block">
@@ -59,6 +59,10 @@
       <div>
         <p class="text-xs font-semibold text-slate-400">परीक्षक की टिप्पणी (Feedback):</p>
         <p id="feedback" class="text-sm text-slate-200 mt-1 leading-relaxed"></p>
+      </div>
+      <div>
+        <p class="text-xs font-semibold text-amber-400">मुख्य सुधार बिंदु (Action Points):</p>
+        <ul id="improvements" class="text-xs text-slate-300 list-disc list-inside mt-1 space-y-1"></ul>
       </div>
 
       <a id="downloadBtn" href="#" download="Evaluated_Copy_PranaPCS.pdf" class="block text-center w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg text-sm shadow transition mt-2">
@@ -98,23 +102,36 @@
 
       try {
         const res = await fetch(`${BACKEND_URL}/evaluate`, { method: "POST", body: formData });
-        if (!res.ok) throw new Error("मूल्यांकन में त्रुटि");
+        const data = await res.json();
 
-        const marks = res.headers.get("X-Marks") || "5.5 / 8";
-        const feedback = res.headers.get("X-Feedback") || "मूल्यांकन संपन्न हुआ।";
+        if (!res.ok || data.status === "error") {
+          throw new Error(data.feedback || "मूल्यांकन में समस्या आई");
+        }
 
-        const blob = await res.blob();
-        const pdfUrl = window.URL.createObjectURL(blob);
+        document.getElementById('marks').innerText = data.obtained_marks;
+        document.getElementById('feedback').innerText = data.feedback;
 
-        document.getElementById('marks').innerText = marks;
-        document.getElementById('feedback').innerText = feedback;
+        const impList = document.getElementById('improvements');
+        impList.innerHTML = "";
+        if (data.improvements && data.improvements.length > 0) {
+          data.improvements.forEach(item => {
+            const li = document.createElement('li');
+            li.innerText = item;
+            impList.appendChild(li);
+          });
+        }
 
-        const dl = document.getElementById('downloadBtn');
-        dl.href = pdfUrl;
+        if (data.pdf_b64) {
+          const dl = document.getElementById('downloadBtn');
+          dl.href = "data:application/pdf;base64," + data.pdf_b64;
+          dl.classList.remove('hidden');
+        } else {
+          document.getElementById('downloadBtn').classList.add('hidden');
+        }
 
         document.getElementById('resultCard').classList.remove('hidden');
       } catch (err) {
-        alert("सर्वर से कनेक्ट होने में समस्या आई। कृपया पुनः प्रयास करें।");
+        alert("मूल्यांकन में समस्या आई: " + err.message);
       } finally {
         btn.innerText = "⚡ AI मूल्यांकन शुरू करें";
         btn.disabled = false;
@@ -123,3 +140,4 @@
   </script>
 </body>
 </html>
+
