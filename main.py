@@ -23,11 +23,11 @@ RENDER_EXTERNAL_URL = os.getenv(
 app = FastAPI()
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML") if BOT_TOKEN else None
 
-FONT_PATH = "/tmp/NotoSansDevanagari-Regular.ttf"
+FONT_PATH = "/tmp/Kalam-Regular.ttf"
 FONT_URL = (
     "https://raw.githubusercontent.com/google/fonts/main/"
-    "ofl/notosansdevanagari/"
-    "NotoSansDevanagari%5Bwdth%2Cwght%5D.ttf"
+    "ofl/kalam/"
+    "Kalam-Regular.ttf"
 )
 
 # chat_id -> pending uploaded copy
@@ -278,8 +278,60 @@ Evaluation ऐसा दिखना चाहिए जैसे किसी �
 ✓ Comments बड़े लाल text में सीधे खाली जगह/margin में हों; कोई box, card, sticker या background न हो।
 ✓ प्रत्येक FULL page पर सामान्यतः 3-4 अलग substantive comments दें।
 ✓ HALF-page answer पर 2-3 comments पर्याप्त हैं।
+✓ इनमें कम से कम एक comment वहाँ दें जहाँ प्रश्न की कोई demand/sub-demand छूटी, कमजोर या अधूरी हो — यदि ऐसी कमी वास्तव में मौजूद है।
+✓ Missing point होने पर comment में साफ लिखें कि "यहाँ क्या होना चाहिए था"।
 ✓ केवल महत्वपूर्ण और वास्तविक mistakes/high-value points चुनें।
 
+============================================================
+QUESTION DEMAND — MANDATORY CHECK
+============================================================
+
+हर प्रश्न को केवल विषय देखकर evaluate न करें। सबसे पहले प्रश्न की
+पूरी demand को छोटे-छोटे components में तोड़ें।
+
+उदाहरण:
+- "कारण बताइए तथा उपाय सुझाइए" = कारण + उपाय
+- "तुलना कीजिए" = दोनों पक्ष + स्पष्ट comparison
+- "चर्चा कीजिए" = dimensions + balanced analysis
+- "मूल्यांकन कीजिए" = merits + limitations + judgement
+- "समझाइए तथा उदाहरण दीजिए" = explanation + examples
+- "प्रभाव और समाधान" = impacts + solutions
+- "महत्व स्पष्ट करते हुए चुनौतियाँ बताइए" = importance + challenges
+
+हर question के लिए जांचें:
+1. प्रश्न में कुल कितने अलग components/parts मांगे गए थे?
+2. अभ्यर्थी ने उनमें से कौन-कौन से parts पूरे किए?
+3. कौन-सा part partial है?
+4. कौन-सा स्पष्ट रूप से छूट गया है?
+5. क्या introduction, body और conclusion प्रश्न की actual demand के अनुरूप हैं?
+6. क्या answer ने केवल topic लिखा है या question के command-word को वास्तव में satisfy किया है?
+
+यदि कोई demanded part छूटा है तो red examiner comment में साफ लिखें:
+"प्रश्न की मांग का यह भाग छूट गया है — यहाँ ______ अपेक्षित था।"
+
+यदि कोई point अपेक्षित था लेकिन कमजोर/अधूरा है:
+"यहाँ ______ को स्पष्ट उदाहरण/तथ्य/विश्लेषण के साथ जोड़ना चाहिए था।"
+
+यदि answer ने demand पूरी की है तो relevant जगह पर red tick दें।
+यदि demand पूरी नहीं हुई है तो marks उसी के अनुसार घटाएँ।
+
+Question की demand को पूरा किए बिना केवल अच्छे facts लिखने पर high marks न दें।
+
+============================================================
+REQUIRED / MISSING POINTS
+============================================================
+
+Red comments केवल गलतियाँ बताने के लिए नहीं हैं।
+
+जहाँ उत्तर में कोई महत्वपूर्ण expected point missing है, वहाँ comment दें:
+"यहाँ ______ का उल्लेख होना चाहिए था।"
+"इस भाग में ______ जोड़ने से प्रश्न की मांग पूरी होती।"
+"यह तर्क अधूरा है; ______ पहलू भी अपेक्षित था।"
+
+ऐसे comments को संबंधित खाली margin में रखें और arrow से
+उस relevant section की ओर संकेत करें।
+
+============================================================
 ============================================================
 WRONG WORD / INAPPROPRIATE WORD
 ============================================================
@@ -350,6 +402,16 @@ OUTPUT
       "pages_used": 2,
       "max_marks": 8,
       "obtained_marks": 5.0,
+      "demand_parts": [
+        "प्रश्न की मांग का पहला भाग",
+        "प्रश्न की मांग का दूसरा भाग"
+      ],
+      "fulfilled_parts": [
+        "पूरा किया गया भाग"
+      ],
+      "skipped_parts": [
+        "छूटा हुआ भाग"
+      ],
       "end_page_comment":
       "यहाँ 15-40 शब्द की substantive examiner टिप्पणी हो।"
     }}
@@ -418,6 +480,10 @@ OUTPUT
 - गलत शब्द के आसपास circle लगाने योग्य tight bbox दें।
 - Good point पर tick लगाने योग्य bbox दें।
 - यदि गलतियाँ कम हैं तो बाकी signs अच्छे points, keywords, facts, structure, diagram, introduction/conclusion आदि पर red ticks हों; गलतियाँ गढ़ें नहीं।
+- प्रत्येक question में demand_parts, fulfilled_parts और skipped_parts अनिवार्य रूप से भरें।
+- skipped_parts खाली नहीं होने चाहिए यदि प्रश्न की कोई स्पष्ट मांग छूटी है।
+- Missing expected point मिलने पर page_comment में स्पष्ट बताएं कि "यहाँ क्या होना चाहिए था"।
+- केवल topic coverage नहीं, बल्कि question के command-word और प्रत्येक sub-demand की पूर्ति को marks में शामिल करें।
 """
 
 
@@ -612,6 +678,27 @@ def normalize_result(data, pages):
                     obtained,
                     1
                 ),
+                "demand_parts": [
+                    str(x)
+                    for x in question.get(
+                        "demand_parts",
+                        []
+                    )
+                ],
+                "fulfilled_parts": [
+                    str(x)
+                    for x in question.get(
+                        "fulfilled_parts",
+                        []
+                    )
+                ],
+                "skipped_parts": [
+                    str(x)
+                    for x in question.get(
+                        "skipped_parts",
+                        []
+                    )
+                ],
                 "end_page_comment": str(
                     question.get(
                         "end_page_comment",
@@ -1104,6 +1191,233 @@ def add_tick(
     )
 
 
+def _page_rgb_image(page, dpi=72):
+    """Render the ORIGINAL answer page for blank-space detection."""
+    pix = page.get_pixmap(
+        dpi=dpi,
+        alpha=False
+    )
+    return Image.frombytes(
+        "RGB",
+        [pix.width, pix.height],
+        pix.samples
+    )
+
+
+def _dark_ratio(crop):
+    """
+    Approximate amount of handwritten/text content in a crop.
+    White paper is near 255. Text/ink is substantially darker.
+    """
+    gray = crop.convert("L")
+    # Resize to make the calculation cheap.
+    gray.thumbnail((180, 180))
+    pixels = list(gray.getdata())
+
+    if not pixels:
+        return 1.0
+
+    dark = sum(
+        1
+        for value in pixels
+        if value < 235
+    )
+
+    return dark / len(pixels)
+
+
+def find_blank_comment_rect(
+    page,
+    desired_w,
+    desired_h,
+    anchor_box,
+    occupied,
+    placement_box=None
+):
+    """
+    Find a genuinely blank region on the page.
+
+    Priority:
+    1. Gemini's suggested placement_box, but ONLY if it is actually blank.
+    2. Left/right margins and empty top/bottom areas.
+    3. Any sufficiently blank region on the page.
+
+    This prevents comments from being drawn over handwriting even when
+    Gemini predicts a poor placement.
+    """
+    try:
+        image = _page_rgb_image(page, dpi=72)
+    except Exception:
+        return None
+
+    iw, ih = image.size
+    sx = page.rect.width / iw
+    sy = page.rect.height / ih
+
+    # Desired size in rendered-image pixels.
+    rw = max(40, int(desired_w / sx))
+    rh = max(35, int(desired_h / sy))
+
+    # Never let the comment itself become tiny.
+    rw = min(rw, int(iw * 0.34))
+    rh = min(rh, int(ih * 0.25))
+
+    # Model-selected placement preference.
+    preferred = None
+    if placement_box:
+        try:
+            py1, px1, py2, px2 = [
+                max(0, min(1000, int(v)))
+                for v in placement_box
+            ]
+            preferred = (
+                int(iw * px1 / 1000),
+                int(ih * py1 / 1000),
+                int(iw * px2 / 1000),
+                int(ih * py2 / 1000)
+            )
+        except Exception:
+            preferred = None
+
+    # Anchor in rendered pixels.
+    try:
+        ymin, xmin, ymax, xmax = anchor_box
+        ax = int(iw * ((xmin + xmax) / 2) / 1000)
+        ay = int(ih * ((ymin + ymax) / 2) / 1000)
+    except Exception:
+        ax, ay = iw // 2, ih // 2
+
+    occupied_px = []
+    for old in occupied:
+        occupied_px.append(
+            (
+                int(old.x0 / sx),
+                int(old.y0 / sy),
+                int(old.x1 / sx),
+                int(old.y1 / sy)
+            )
+        )
+
+    def overlaps_old(x, y):
+        for ox1, oy1, ox2, oy2 in occupied_px:
+            if not (
+                x + rw <= ox1 or
+                x >= ox2 or
+                y + rh <= oy1 or
+                y >= oy2
+            ):
+                return True
+        return False
+
+    def valid_blank(x, y):
+        if x < 2 or y < 2:
+            return False
+
+        if x + rw >= iw - 2 or y + rh >= ih - 2:
+            return False
+
+        if overlaps_old(x, y):
+            return False
+
+        crop = image.crop(
+            (x, y, x + rw, y + rh)
+        )
+
+        # Very strict: comments should go on genuinely white paper.
+        return _dark_ratio(crop) <= 0.035
+
+    candidates = []
+
+    # A) Search inside Gemini's proposed blank box.
+    if preferred:
+        px1, py1, px2, py2 = preferred
+        px1 = max(0, min(iw - rw, px1))
+        py1 = max(0, min(ih - rh, py1))
+        px2 = min(iw, max(px1 + rw, px2))
+        py2 = min(ih, max(py1 + rh, py2))
+
+        step_x = max(20, rw // 5)
+        step_y = max(20, rh // 5)
+
+        y = py1
+        while y <= max(py1, py2 - rh):
+            x = px1
+            while x <= max(px1, px2 - rw):
+                candidates.append((x, y, 0))
+                x += step_x
+            y += step_y
+
+    # B) Margins and blank edge zones.
+    margin_x = int(iw * 0.23)
+    edge_y = int(ih * 0.18)
+
+    for y in range(
+        8,
+        max(9, ih - rh - 8),
+        max(20, rh // 4)
+    ):
+        # Left margin
+        candidates.append((8, y, 1))
+        # Right margin
+        candidates.append((max(8, iw - rw - 8), y, 1))
+
+    for x in range(
+        8,
+        max(9, iw - rw - 8),
+        max(20, rw // 5)
+    ):
+        candidates.append((x, 8, 2))
+        candidates.append(
+            (x, max(8, ih - rh - 8), 2)
+        )
+
+    # C) General page grid as a fallback.
+    for y in range(
+        8,
+        max(9, ih - rh - 8),
+        max(30, rh // 3)
+    ):
+        for x in range(
+            8,
+            max(9, iw - rw - 8),
+            max(30, rw // 4)
+        ):
+            candidates.append((x, y, 3))
+
+    best = None
+
+    for x, y, priority in candidates:
+        if not valid_blank(x, y):
+            continue
+
+        # Prefer comments near their anchor, but blankness always wins.
+        distance = (
+            (x + rw / 2 - ax) ** 2
+            + (y + rh / 2 - ay) ** 2
+        ) ** 0.5
+
+        score = (
+            priority * 10_000
+            + distance
+        )
+
+        if best is None or score < best[0]:
+            best = (score, x, y)
+
+    if best is None:
+        return None
+
+    _, x, y = best
+
+    return fitz.Rect(
+        x * sx,
+        y * sy,
+        (x + rw) * sx,
+        (y + rh) * sy
+    )
+
+
+
 def place_comment(
     page,
     text,
@@ -1114,102 +1428,73 @@ def place_comment(
     occupied
 ):
     """
-    Drishti-style examiner comment.
+    Drishti-style handwritten examiner comment.
 
-    placement_box is the BLANK/EMPTY area selected by Gemini.
-    The comment is never intentionally placed over handwritten text.
-    anchor_box is used only for the thin red arrow.
+    IMPORTANT:
+    placement_box is only a preference from Gemini.
+    The final position is selected by pixel-level blank-space
+    detection on the ORIGINAL page, so the comment does not
+    cover handwritten answer text.
     """
     png = make_comment_badge(
         text,
-        width=1400,
-        font_size=105
+        width=1600,
+        font_size=92
     )
 
-    badge_image = Image.open(io.BytesIO(png))
+    badge_image = Image.open(
+        io.BytesIO(png)
+    )
+
     img_w, img_h = badge_image.size
 
-    try:
-        py1, px1, py2, px2 = [
-            max(0, min(1000, int(v)))
-            for v in placement_box
-        ]
-    except Exception:
-        py1, px1, py2, px2 = 50, 5, 300, 300
-
-    bx1 = page_width * px1 / 1000
-    by1 = page_height * py1 / 1000
-    bx2 = page_width * px2 / 1000
-    by2 = page_height * py2 / 1000
-
-    available_w = max(60, bx2 - bx1)
-    available_h = max(45, by2 - by1)
-
-    target_w = min(
-        available_w,
-        page_width * 0.30
+    # Keep the comment large.
+    desired_w = min(
+        page_width * 0.30,
+        245
     )
-    target_h = target_w * img_h / img_w
 
-    if target_h > available_h:
-        target_h = available_h
-        target_w = max(
-            60,
-            target_h * img_w / img_h
-        )
+    desired_h = (
+        desired_w
+        * img_h
+        / img_w
+    )
 
-    target_w = min(target_w, page_width * 0.32)
-    target_h = min(target_h, page_height * 0.22)
+    desired_h = min(
+        desired_h,
+        page_height * 0.24
+    )
 
-    candidates = [
-        (bx1, by1),
-        (bx1, by1 + available_h * 0.20),
-        (bx1, by1 + available_h * 0.40),
-        (bx1, by1 + available_h * 0.60),
-        (bx1 + available_w - target_w, by1),
-        (bx1 + available_w - target_w,
-         by1 + available_h * 0.30),
-    ]
+    chosen_rect = find_blank_comment_rect(
+        page,
+        desired_w,
+        desired_h,
+        anchor_box,
+        occupied,
+        placement_box
+    )
 
-    chosen_rect = None
-
-    for x, y in candidates:
-        x = max(4, min(page_width - target_w - 4, x))
-        y = max(4, min(page_height - target_h - 4, y))
-
-        rect = fitz.Rect(
-            x, y,
-            x + target_w,
-            y + target_h
-        )
-
-        if all(
-            not rect.intersects(old)
-            for old in occupied
-        ):
-            chosen_rect = rect
-            break
-
+    # If the page has no sufficiently blank area of the preferred
+    # size, progressively reduce the box — but never intentionally
+    # place it over text.
     if chosen_rect is None:
-        x = max(
-            4,
-            min(
-                page_width - target_w - 4,
-                bx1
+        for scale in (0.88, 0.76, 0.64):
+            rect = find_blank_comment_rect(
+                page,
+                desired_w * scale,
+                desired_h * scale,
+                anchor_box,
+                occupied,
+                placement_box
             )
-        )
-        y = max(
-            4,
-            min(
-                page_height - target_h - 4,
-                by1
-            )
-        )
-        chosen_rect = fitz.Rect(
-            x, y,
-            x + target_w,
-            y + target_h
-        )
+            if rect is not None:
+                chosen_rect = rect
+                break
+
+    # If absolutely no blank region is found, skip this comment
+    # rather than writing over the student's answer.
+    if chosen_rect is None:
+        return
 
     page.insert_image(
         chosen_rect,
@@ -1257,7 +1542,7 @@ def place_comment(
             + (start_y - anchor_y) ** 2
         ) ** 0.5
 
-        if distance <= page_width * 0.45:
+        if distance <= page_width * 0.55:
             draw_arrow(
                 page,
                 start_x,
