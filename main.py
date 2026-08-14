@@ -1704,38 +1704,29 @@ if bot:
             except Exception:
                 pass
 
-            improvements = "\n".join(
-                "• " + x
-                for x in result[
-                    "improvements"
-                ]
-            )
-
-            if not improvements:
-                improvements = (
-                    "• कोई अतिरिक्त सुझाव नहीं।"
-                )
-
+            # Keep Telegram caption short. Detailed feedback is already
+            # embedded in the evaluated PDF.
             caption = (
                 f"🏛️ <b>PRANA PCS — {paper} Evaluation</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 f"🎯 <b>प्राप्तांक:</b> "
-                f"<code>"
-                f"{result['total_obtained_marks']:g}"
-                f" / "
-                f"{result['total_max_marks']:g}"
-                f"</code>\n\n"
-                f"📝 <b>समग्र समीक्षा:</b>\n"
-                f"{result['overall_feedback']}\n\n"
-                f"💡 <b>सुधार:</b>\n"
-                f"{improvements}\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>Examiner-style evaluated copy 👇</i>"
+                f"<code>{result['total_obtained_marks']:g} / "
+                f"{result['total_max_marks']:g}</code>\n\n"
+                "📄 <b>Examiner-style evaluated copy नीचे है।</b>\n"
+                "🔴 Red ticks/circles और बड़े examiner comments "
+                "कॉपी में दिए गए हैं।"
             )
 
-            original_name = item.get("filename", "submission.pdf")
-            original_stem = Path(original_name).stem or "submission"
-            evaluated_filename = f"{original_stem}_Evaluated.pdf"
+            original_name = item.get(
+                "filename",
+                "submission.pdf"
+            )
+            original_stem = Path(
+                original_name
+            ).stem or "submission"
+            evaluated_filename = (
+                f"{original_stem}_Evaluated.pdf"
+            )
 
             bot.send_document(
                 chat_id,
