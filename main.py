@@ -270,9 +270,14 @@ Evaluation ऐसा दिखना चाहिए जैसे किसी �
 ✓ जहाँ सुधार आवश्यक है वहाँ छोटा लेकिन substantive examiner comment दें।
 ✓ केवल 3-5 शब्द के generic comments न दें।
 ✓ प्रत्येक comment लगभग 15-40 शब्द का substantive examiner remark हो।
-✓ Comments answer के relevant हिस्से के पास लगाने योग्य हों।
-✓ अनावश्यक रूप से हर लाइन पर annotation न करें।
-✓ Comments बड़े लाल text में सीधे margin में हों; कोई box, card, sticker या background न हो।
+✓ Comments answer के relevant हिस्से से जुड़े हों, लेकिन लिखे हुए उत्तर के ऊपर/बीच में कभी न लिखें।
+✓ प्रत्येक comment के लिए placement_box ऐसी वास्तविक खाली/सफेद जगह का चयन करे जहाँ comment साफ दिखाई दे।
+✓ पहले left/right margin, खाली किनारे तथा खाली ऊपर/नीचे की जगह को प्राथमिकता दें।
+✓ यदि relevant text के पास जगह नहीं है, तो निकटतम खाली margin में comment रखें और anchor से पतला arrow दें।
+✓ placement_box लिखे हुए शब्दों, पंक्तियों या diagrams के ऊपर overlap नहीं करना चाहिए।
+✓ Comments बड़े लाल text में सीधे खाली जगह/margin में हों; कोई box, card, sticker या background न हो।
+✓ प्रत्येक FULL page पर सामान्यतः 3-4 अलग substantive comments दें।
+✓ HALF-page answer पर 2-3 comments पर्याप्त हैं।
 ✓ केवल महत्वपूर्ण और वास्तविक mistakes/high-value points चुनें।
 
 ============================================================
@@ -312,6 +317,22 @@ format में दें।
 सभी values 0-1000 normalized हों।
 
 ============================================================
+OVERALL FEEDBACK
+============================================================
+
+"overall_feedback" केवल 4-5 छोटी पंक्तियों की समग्र टिप्पणी हो।
+इसमें एक साथ:
+- भाषा एवं अभिव्यक्ति,
+- उत्तर की शैली/संरचना,
+- प्रस्तुतीकरण,
+- विश्लेषण/वैल्यू एडिशन,
+- और आगे सुधार की आशावादी दिशा
+का संतुलित उल्लेख हो।
+
+Tone: वरिष्ठ examiner जैसा, स्पष्ट, सकारात्मक और सुधारोन्मुख।
+कोई अलग heading, bullet list, score repeat, "suggestions" या अनावश्यक औपचारिक वाक्य न जोड़ें।
+
+============================================================
 OUTPUT
 ============================================================
 
@@ -338,25 +359,25 @@ OUTPUT
     {{
       "page": 1,
       "comment": "15-40 शब्द की substantive examiner टिप्पणी।",
-      "side": "right",
+      "placement_box": [50, 700, 300, 995],
       "anchor": [400, 500, 550, 800]
     }},
     {{
       "page": 1,
       "comment": "दूसरी अलग substantive examiner टिप्पणी।",
-      "side": "left",
+      "placement_box": [300, 5, 520, 300],
       "anchor": [500, 250, 650, 700]
     }},
     {{
       "page": 1,
       "comment": "तीसरी अलग substantive examiner टिप्पणी।",
-      "side": "right",
+      "placement_box": [520, 700, 760, 995],
       "anchor": [650, 450, 800, 850]
     }},
     {{
       "page": 1,
       "comment": "चौथी अलग substantive examiner टिप्पणी।",
-      "side": "left",
+      "placement_box": [760, 5, 995, 300],
       "anchor": [750, 200, 900, 700]
     }}
   ],
@@ -390,7 +411,10 @@ OUTPUT
 - Page numbers 1-based हैं।
 - Question end_page वास्तविक answer ending के आधार पर दें।
 - हर full page के लिए 4-6 annotations और half-page के लिए 2-3 annotations दें।
-- हर page के लिए 3-4 अलग page_comments दें।
+- हर FULL page के लिए 3-4 अलग page_comments दें; HALF-page के लिए 2-3।
+- हर page_comment में placement_box अनिवार्य रूप से खाली/सफेद जगह का normalized bbox हो।
+- placement_box लिखे हुए answer text पर नहीं होना चाहिए।
+- Comment को answer के ऊपर नहीं, बल्कि खाली margin/खाली जगह में रखें और जरूरत पर arrow से संबंधित point तक जोड़ें।
 - गलत शब्द के आसपास circle लगाने योग्य tight bbox दें।
 - Good point पर tick लगाने योग्य bbox दें।
 - यदि गलतियाँ कम हैं तो बाकी signs अच्छे points, keywords, facts, structure, diagram, introduction/conclusion आदि पर red ticks हों; गलतियाँ गढ़ें नहीं।
@@ -1084,69 +1108,109 @@ def place_comment(
     page,
     text,
     anchor_box,
-    side,
+    placement_box,
     page_width,
     page_height,
     occupied
 ):
-    """Large, box-free Drishti-style red examiner comment."""
+    """
+    Drishti-style examiner comment.
+
+    placement_box is the BLANK/EMPTY area selected by Gemini.
+    The comment is never intentionally placed over handwritten text.
+    anchor_box is used only for the thin red arrow.
+    """
     png = make_comment_badge(
         text,
-        width=1200,
-        font_size=150
+        width=1400,
+        font_size=105
     )
 
-    # Read actual rendered PNG dimensions so font does not shrink to a tiny size.
     badge_image = Image.open(io.BytesIO(png))
     img_w, img_h = badge_image.size
 
-    box_width = min(220, page_width * 0.31)
-    box_height = max(48, box_width * img_h / img_w)
-    box_height = min(box_height, page_height * 0.27)
+    try:
+        py1, px1, py2, px2 = [
+            max(0, min(1000, int(v)))
+            for v in placement_box
+        ]
+    except Exception:
+        py1, px1, py2, px2 = 50, 5, 300, 300
 
-    requested_side = 'left' if side == 'left' else 'right'
-    sides = [requested_side, 'left' if requested_side == 'right' else 'right']
+    bx1 = page_width * px1 / 1000
+    by1 = page_height * py1 / 1000
+    bx2 = page_width * px2 / 1000
+    by2 = page_height * py2 / 1000
 
-    anchor_y = anchor_box[0] / 1000 * page_height
-    candidates_y = [
-        anchor_y - box_height / 2,
-        anchor_y - 95,
-        anchor_y + 95,
-        anchor_y - 190,
-        anchor_y + 190,
-        10,
-        page_height - box_height - 10
+    available_w = max(60, bx2 - bx1)
+    available_h = max(45, by2 - by1)
+
+    target_w = min(
+        available_w,
+        page_width * 0.30
+    )
+    target_h = target_w * img_h / img_w
+
+    if target_h > available_h:
+        target_h = available_h
+        target_w = max(
+            60,
+            target_h * img_w / img_h
+        )
+
+    target_w = min(target_w, page_width * 0.32)
+    target_h = min(target_h, page_height * 0.22)
+
+    candidates = [
+        (bx1, by1),
+        (bx1, by1 + available_h * 0.20),
+        (bx1, by1 + available_h * 0.40),
+        (bx1, by1 + available_h * 0.60),
+        (bx1 + available_w - target_w, by1),
+        (bx1 + available_w - target_w,
+         by1 + available_h * 0.30),
     ]
 
     chosen_rect = None
-    chosen_side = requested_side
 
-    for candidate_side in sides:
-        if candidate_side == 'left':
-            x1, x2 = 5, 5 + box_width
-        else:
-            x2, x1 = page_width - 5, page_width - 5 - box_width
+    for x, y in candidates:
+        x = max(4, min(page_width - target_w - 4, x))
+        y = max(4, min(page_height - target_h - 4, y))
 
-        for candidate in candidates_y:
-            y = max(8, min(page_height - box_height - 8, candidate))
-            rect = fitz.Rect(x1, y, x2, y + box_height)
-            if all(not rect.intersects(old) for old in occupied):
-                chosen_rect = rect
-                chosen_side = candidate_side
-                break
-        if chosen_rect:
+        rect = fitz.Rect(
+            x, y,
+            x + target_w,
+            y + target_h
+        )
+
+        if all(
+            not rect.intersects(old)
+            for old in occupied
+        ):
+            chosen_rect = rect
             break
 
     if chosen_rect is None:
-        chosen_rect = fitz.Rect(
-            5 if requested_side == 'left' else page_width - box_width - 5,
-            max(8, min(page_height - box_height - 8, anchor_y - box_height / 2)),
-            5 + box_width if requested_side == 'left' else page_width - 5,
-            max(8, min(page_height - box_height - 8, anchor_y - box_height / 2)) + box_height
+        x = max(
+            4,
+            min(
+                page_width - target_w - 4,
+                bx1
+            )
         )
-        chosen_side = requested_side
+        y = max(
+            4,
+            min(
+                page_height - target_h - 4,
+                by1
+            )
+        )
+        chosen_rect = fitz.Rect(
+            x, y,
+            x + target_w,
+            y + target_h
+        )
 
-    # Transparent image: only large red text appears, with no card/border/background.
     page.insert_image(
         chosen_rect,
         stream=png,
@@ -1154,14 +1218,56 @@ def place_comment(
         overlay=True
     )
 
-    ymin, xmin, ymax, xmax = anchor_box
-    anchor_x = (xmin + xmax) / 2 / 1000 * page_width
-    anchor_y = (ymin + ymax) / 2 / 1000 * page_height
+    try:
+        ymin, xmin, ymax, xmax = anchor_box
 
-    start_x = chosen_rect.x0 if chosen_side == 'right' else chosen_rect.x1
-    start_y = chosen_rect.y0 + chosen_rect.height / 2
+        anchor_x = (
+            (xmin + xmax) / 2
+            / 1000
+            * page_width
+        )
+        anchor_y = (
+            (ymin + ymax) / 2
+            / 1000
+            * page_height
+        )
 
-    draw_arrow(page, start_x, start_y, anchor_x, anchor_y)
+        if anchor_x < chosen_rect.x0:
+            start_x = chosen_rect.x0
+        elif anchor_x > chosen_rect.x1:
+            start_x = chosen_rect.x1
+        else:
+            start_x = (
+                chosen_rect.x0
+                + chosen_rect.width / 2
+            )
+
+        if anchor_y < chosen_rect.y0:
+            start_y = chosen_rect.y0
+        elif anchor_y > chosen_rect.y1:
+            start_y = chosen_rect.y1
+        else:
+            start_y = (
+                chosen_rect.y0
+                + chosen_rect.height / 2
+            )
+
+        distance = (
+            (start_x - anchor_x) ** 2
+            + (start_y - anchor_y) ** 2
+        ) ** 0.5
+
+        if distance <= page_width * 0.45:
+            draw_arrow(
+                page,
+                start_x,
+                start_y,
+                anchor_x,
+                anchor_y
+            )
+    except Exception:
+        pass
+
     occupied.append(chosen_rect)
 
 
@@ -1326,16 +1432,16 @@ def annotate_pdf(
                 [500, 450, 550, 550]
             )
 
-            side = comment.get(
-                "side",
-                "right"
+            placement_box = comment.get(
+                "placement_box",
+                [50, 700, 300, 995]
             )
 
             place_comment(
                 page,
                 text,
                 anchor,
-                side,
+                placement_box,
                 page_width,
                 page_height,
                 occupied
@@ -1417,7 +1523,7 @@ def annotate_pdf(
                 page,
                 text,
                 [800, 450, 930, 900],
-                "right",
+                [700, 700, 995, 995],
                 page_width,
                 page_height,
                 occupied
@@ -1712,10 +1818,12 @@ if bot:
                 f"🎯 <b>प्राप्तांक:</b> "
                 f"<code>{result['total_obtained_marks']:g} / "
                 f"{result['total_max_marks']:g}</code>\n\n"
-                "📄 <b>Examiner-style evaluated copy नीचे है।</b>\n"
-                "🔴 Red ticks/circles और बड़े examiner comments "
-                "कॉपी में दिए गए हैं।"
+                f"{str(result.get('overall_feedback', '')).strip()}"
             )
+
+            # Keep the Telegram caption safely below Telegram's limit.
+            caption = caption[:900]
+
 
             original_name = item.get(
                 "filename",
