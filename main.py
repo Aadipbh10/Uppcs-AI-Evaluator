@@ -1,12 +1,12 @@
 import os
 import io
 import json
+import base64
+import requests
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from PIL import Image
-from google import genai
-from google.genai import types
 import fitz  # PyMuPDF
 
 app = FastAPI()
@@ -21,11 +21,10 @@ app.add_middleware(
 )
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 @app.get("/")
 def home():
-    return {"status": "UPPCS Evaluator Backend is 100% Active!"}
+    return {"status": "UPPCS Evaluator Backend is 100% Ready and Active!"}
 
 @app.post("/evaluate")
 async def evaluate_answer(
@@ -33,33 +32,41 @@ async def evaluate_answer(
     paper: str = Form("GS 5"),
     max_marks: int = Form(8)
 ):
-    if not client:
+    if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="Gemini API Key missing on server")
 
     file_bytes = await file.read()
-    images = []
+    parts = []
     pdf_doc = None
 
-    # चेक करें PDF है या Image
+    # चेक करें कि फ़ाइल PDF है या Image
     if file.filename.lower().endswith(".pdf") or file.content_type == "application/pdf":
         pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
         for page in pdf_doc:
-            pix = page.get_pixmap(dpi=150)
-            img = Image.open(io.BytesIO(pix.tobytes("png")))
-            images.append(img)
+            pix = page.get_pixmap(dpi=120)
+            img_b64 = base64.b64encode(pix.tobytes("jpeg")).decode("utf-8")
+            parts.append({
+                "inlineData": {
+                    "mimeType": "image/jpeg",
+                    "data": img_b64
+                }
+            })
     else:
-        img = Image.open(io.BytesIO(file_bytes))
-        images.append(img)
+        img_b64 = base64.b64encode(file_bytes).decode("utf-8")
+        mime = file.content_type if file.content_type else "image/jpeg"
+        parts.append({
+            "inlineData": {
+                "mimeType": mime,
+                "data": img_b64
+            }
+        })
 
-    if not images:
-        raise HTTPException(status_code=400, detail="कोई वैध पेज नहीं मिला")
-
-    prompt = f"""
+    prompt_text = f"""
     आप UPPCS मुख्य परीक्षा के वरिष्ठ परीक्षक हैं।
     विषय: {paper} | पूर्णांक: {max_marks}
 
-    इस हस्तलिखित उत्तर का संपूर्ण मूल्यांकन करें।
-    आउटपुट केवल इस JSON फॉर्मेट में दें:
+    इस हस्तलिखित उत्तर पुस्तिका का मूल्यांकन करें।
+    आउटपुट केवल और केवल इस JSON प्रारूप में दें:
     {{
         "obtained_marks": 5.5,
         "feedback": "उत्तर की संरचना अच्छी है। UP बजट के आंकड़े जोड़ें।",
@@ -70,32 +77,44 @@ async def evaluate_answer(
         ]
     }}
     """
+    parts.append({"text": prompt_text})
 
-    # Gemini 2.5 Flash API Call
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=[*images, prompt]
-    )
+    # Direct Gemini REST API Call (Zero Dependency Crash)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "responseMimeType": "application/json"
+        }
+    }
 
+    res = requests.post(url, json=payload, timeout=60)
+    
+    if res.status_code != 200:
+        raise HTTPException(status_code=500, detail=f"Gemini API Error: {res.text}")
+
+    resp_json = res.json()
+    raw_text = resp_json['candidates'][0]['content']['parts'][0]['text']
+    
     try:
-        clean_text = response.text.replace("```json", "").replace("```", "").strip()
-        eval_data = json.loads(clean_text)
+        eval_data = json.loads(raw_text)
     except Exception:
         eval_data = {
             "obtained_marks": 5.0,
-            "feedback": response.text[:200] if response.text else "मूल्यांकन संपन्न।",
+            "feedback": raw_text[:200],
             "improvements": ["संरचना में सुधार करें", "तथ्यों को रेखांकित करें"]
         }
 
-    # PDF स्टैम्पिंग
+    # PDF स्टैम्पिंग (अगर इमेज थी तो PDF बनाएं)
     if pdf_doc is None:
         pdf_doc = fitz.open()
-        img_page = pdf_doc.new_page(width=images[0].width, height=images[0].height)
+        img = Image.open(io.BytesIO(file_bytes))
+        img_page = pdf_doc.new_page(width=img.width, height=img.height)
         img_page.insert_image(img_page.rect, stream=file_bytes)
 
     first_page = pdf_doc[0]
     
-    # लाल डिजिटल स्टैम्प
+    # 🔴 लाल डिजिटल स्टैम्प बॉक्स (Top-Right)
     rect = fitz.Rect(first_page.rect.width - 230, 20, first_page.rect.width - 20, 85)
     first_page.draw_rect(rect, color=(0.8, 0, 0), width=2, fill=(1, 0.92, 0.92))
     first_page.insert_text(
