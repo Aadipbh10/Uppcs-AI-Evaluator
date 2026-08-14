@@ -1,448 +1,401 @@
+
 import os
 import io
 import json
 import base64
+import tempfile
 import requests
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 import telebot
-
 from PIL import Image, ImageDraw, ImageFont
 import pymupdf as fitz
 
 
-# ============================================================
-# ENVIRONMENT
-# ============================================================
-
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-
 RENDER_EXTERNAL_URL = os.getenv(
     "RENDER_EXTERNAL_URL",
     "https://uppcs-ai-evaluator.onrender.com"
 ).rstrip("/")
 
-
-# ============================================================
-# APP / TELEGRAM BOT
-# ============================================================
-
 app = FastAPI()
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML") if BOT_TOKEN else None
 
-bot = (
-    telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
-    if BOT_TOKEN
-    else None
-)
-
-
-# ============================================================
-# HINDI FONT
-# ============================================================
-
-HINDI_FONT_PATH = "/tmp/NotoSansDevanagari-Regular.ttf"
-
-HINDI_FONT_URL = (
+FONT_PATH = "/tmp/NotoSansDevanagari-Regular.ttf"
+FONT_URL = (
     "https://raw.githubusercontent.com/google/fonts/main/"
     "ofl/notosansdevanagari/"
     "NotoSansDevanagari%5Bwdth%2Cwght%5D.ttf"
 )
 
+# chat_id -> pending uploaded copy
+PENDING = {}
 
-def download_hindi_font():
-    """
-    Render server पर Hindi font उपलब्ध कराता है।
-    """
+MODELS = [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-2.5-flash"
+]
 
+RUBRICS = {
+    "GS1": """
+GS1: History-Art-Culture, Geography, Indian Society.
+Focus: multidimensional analysis, chronology/context, historians/quotes,
+maps and diagrams for geography, society data/reports, contemporary linkage.
+Value addition: maps, timeline, diagrams, data, case studies, thinkers,
+cultural examples. Avoid generic essay-like writing.
+""",
+    "GS2": """
+GS2: Constitution, Polity, Governance, Social Justice, International Relations.
+Focus: Articles, amendments, Supreme Court judgments, committees/ARC,
+constitutional morality, government efforts, balanced challenges/solutions.
+For IR use strategic/diplomatic dimensions and relevant maps. Differences
+should preferably be tabular/T-format. Way Forward is important.
+""",
+    "GS3": """
+GS3: Economy, Agriculture, Science-Tech, Environment, Disaster Management,
+Internal Security. Use 3D: Data + Diagram + Dynamics. Look for Economic Survey,
+Budget, NITI/official reports, policy names, technical applications,
+disaster-cycle, climate mitigation/adaptation, security maps and institutions.
+Generic statements should score poorly.
+""",
+    "GS4": """
+GS4: Ethics, Integrity, Aptitude. Theory must be applied. Look for precise
+ethical definitions, thinkers/quotes, keywords, real administrative/personal
+examples, ethical dilemmas, stakeholder analysis, EI, constitutional morality,
+good governance. Case studies: stakeholders -> dilemmas -> options ->
+pros/cons -> balanced decision -> implementation.
+""",
+    "GS5": """
+GS5: Uttar Pradesh-specific History, Culture, Polity, Governance, Security,
+Education, Health, Tourism. Hyper-localization is central. Look for UP
+districts, UP schemes/portals, UP-specific data, regional divisions
+(Purvanchal, Bundelkhand, Western UP, Awadh), UP maps, ODOP, local culture,
+Nepal-border districts and UP security institutions.
+Generic all-India answers should score poorly when UP specificity is required.
+""",
+    "GS6": """
+GS6: Uttar Pradesh Economy, Agriculture, Geography, Environment, Science-Tech,
+Infrastructure. Focus on UP Budget/Economic Survey, data, UP maps, regional/
+sectoral analysis, 9 agro-climatic zones, minerals, expressways, defence
+corridor, Ramsar/tiger reserves, UP policies and infrastructure. Generic
+answers without UP data/policy/map should be below average.
+"""
+}
+
+
+def ensure_font():
     try:
-        if os.path.exists(HINDI_FONT_PATH):
+        if os.path.exists(FONT_PATH) and os.path.getsize(FONT_PATH) > 10000:
+            return True
 
-            if os.path.getsize(HINDI_FONT_PATH) > 10000:
-                print("Hindi font already available.")
-                return True
+        r = requests.get(FONT_URL, timeout=25)
+        r.raise_for_status()
 
-        print("Downloading Hindi font...")
+        with open(FONT_PATH, "wb") as f:
+            f.write(r.content)
 
-        response = requests.get(
-            HINDI_FONT_URL,
-            timeout=25
-        )
-
-        response.raise_for_status()
-
-        with open(HINDI_FONT_PATH, "wb") as f:
-            f.write(response.content)
-
-        if os.path.getsize(HINDI_FONT_PATH) < 10000:
-            raise Exception(
-                "Downloaded Hindi font is invalid."
-            )
-
-        print("Hindi font downloaded successfully.")
-
-        return True
+        return os.path.getsize(FONT_PATH) > 10000
 
     except Exception as e:
-
-        print(
-            "Hindi font download error:",
-            repr(e)
-        )
-
+        print("FONT ERROR:", e)
         return False
 
 
-FONT_READY = download_hindi_font()
+ensure_font()
 
 
-def get_hindi_font(size):
-
+def font(size):
     try:
-
-        if os.path.exists(HINDI_FONT_PATH):
-
-            return ImageFont.truetype(
-                HINDI_FONT_PATH,
-                size=size
-            )
-
-    except Exception as e:
-
-        print(
-            "Hindi font loading error:",
-            repr(e)
-        )
-
-    return ImageFont.load_default()
+        return ImageFont.truetype(FONT_PATH, size)
+    except Exception:
+        return ImageFont.load_default()
 
 
-# ============================================================
-# STARTUP
-# ============================================================
+def normalize_paper(text):
+    t = text.upper().replace("-", "").replace("_", "").replace(" ", "")
+
+    if "GS1" in t or "जीएस1" in text.replace(" ", ""):
+        return "GS1"
+    if "GS2" in t or "जीएस2" in text.replace(" ", ""):
+        return "GS2"
+    if "GS3" in t or "जीएस3" in text.replace(" ", ""):
+        return "GS3"
+    if "GS4" in t or "जीएस4" in text.replace(" ", ""):
+        return "GS4"
+    if "GS5" in t or "जीएस5" in text.replace(" ", ""):
+        return "GS5"
+    if "GS6" in t or "जीएस6" in text.replace(" ", ""):
+        return "GS6"
+
+    return None
+
+
+def save_submission(data, suffix=".bin"):
+    fd, path = tempfile.mkstemp(
+        prefix="prana_",
+        suffix=suffix
+    )
+
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+
+    return path
+
+
+def ask_paper(message):
+    bot.reply_to(
+        message,
+        "📚 <b>कॉपी प्राप्त हो गई है।</b>\n\n"
+        "मूल्यांकन शुरू करने से पहले <b>Paper Name</b> भेजें:\n\n"
+        "• GS 1\n"
+        "• GS 2\n"
+        "• GS 3\n"
+        "• GS 4\n"
+        "• GS 5\n"
+        "• GS 6\n\n"
+        "उदाहरण: <b>GS 3</b>"
+    )
+
 
 @app.on_event("startup")
-def setup_webhook():
+def startup():
+    ensure_font()
 
-    download_hindi_font()
-
-    if bot and BOT_TOKEN:
-
-        webhook_url = (
-            f"{RENDER_EXTERNAL_URL}/webhook"
-        )
-
+    if bot:
         try:
-
             bot.remove_webhook()
-
             bot.set_webhook(
-                url=webhook_url
+                url=f"{RENDER_EXTERNAL_URL}/webhook"
             )
-
-            print(
-                "Telegram webhook set:",
-                webhook_url
-            )
-
         except Exception as e:
+            print("WEBHOOK ERROR:", e)
 
-            print(
-                "Webhook setup error:",
-                repr(e)
-            )
-
-
-# ============================================================
-# HOME
-# ============================================================
 
 @app.get("/")
 def home():
-
     return {
-        "status": "PRANA PCS AI Mains Evaluator Active",
-        "hindi_badge_renderer": FONT_READY
+        "status": "PRANA PCS AI Evaluator Active",
+        "font": os.path.exists(FONT_PATH)
     }
 
 
-# ============================================================
-# TELEGRAM WEBHOOK
-# ============================================================
-
 @app.post("/webhook")
-async def telegram_webhook(
-    request: Request
-):
+async def webhook(request: Request):
 
     if bot:
+        data = await request.json()
 
-        json_data = await request.json()
-
-        update = (
-            telebot.types.Update
-            .de_json(json_data)
+        update = telebot.types.Update.de_json(
+            data
         )
 
         bot.process_new_updates(
             [update]
         )
 
-    return {
-        "ok": True
-    }
+    return {"ok": True}
 
 
-# ============================================================
-# GEMINI MODELS
-# ============================================================
+def image_pages_from_pdf(pdf):
+    pages = []
 
-ACTIVE_MODELS = [
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-2.5-flash"
-]
-
-
-# ============================================================
-# GEMINI EVALUATION
-# ============================================================
-
-def evaluate_with_gemini(
-    images_b64,
-    total_pages
-):
-
-    parts = []
-
-    # --------------------------------------------------------
-    # Answer sheet pages
-    # --------------------------------------------------------
-
-    for b64 in images_b64:
-
-        parts.append(
-            {
-                "inline_data": {
-                    "mime_type": "image/jpeg",
-                    "data": b64
-                }
-            }
+    for page in pdf:
+        pix = page.get_pixmap(
+            dpi=120,
+            alpha=False
         )
 
-    # --------------------------------------------------------
-    # MASTER PROMPT
-    # --------------------------------------------------------
+        pages.append(
+            pix.tobytes(
+                "jpeg",
+                jpg_quality=88
+            )
+        )
 
-    prompt = f"""
-आप UPPCS मुख्य परीक्षा के वरिष्ठ परीक्षक हैं।
+    return pages
 
-आपके सामने एक अभ्यर्थी की उत्तर पुस्तिका है।
-कुल पृष्ठ संख्या: {total_pages}
 
-आपको इस कॉपी का वास्तविक UPPCS Mains examiner की तरह
-गंभीर, निष्पक्ष और page-by-page मूल्यांकन करना है।
+def build_prompt(paper, total_pages):
 
-============================================================
-सबसे महत्वपूर्ण MARKING RULES
-============================================================
+    return f"""
+आप PRANA PCS के वरिष्ठ UPPCS Mains examiner हैं।
 
-1. उत्तर पुस्तिका में प्रत्येक अलग प्रश्न पहचानें।
+Paper: {paper}
+Total pages: {total_pages}
 
-2. किसी प्रश्न का उत्तर यदि कुल 2 pages में लिखा गया है,
-   तो उस प्रश्न के अधिकतम अंक 8 होंगे।
-
-3. 2-page / 8-mark question में प्राप्तांक की HARD LIMIT:
-   अधिकतम 5.5 अंक।
-
-4. किसी प्रश्न का उत्तर यदि कुल 3 pages में लिखा गया है,
-   तो उस प्रश्न के अधिकतम अंक 12 होंगे।
-
-5. 3-page / 12-mark question में प्राप्तांक की HARD LIMIT:
-   अधिकतम 8.5 अंक।
-
-6. 8 marks वाले प्रश्न में कभी भी 5.5 से अधिक अंक न दें।
-
-7. 12 marks वाले प्रश्न में कभी भी 8.5 से अधिक अंक न दें।
-
-8. प्रश्न के उत्तर का जिस page पर वास्तविक अंत होता है,
-   उसी page को उस प्रश्न का end_page मानें।
-
-9. उसी end_page पर examiner marks दिखाई जाएंगे।
-
-10. यदि कोई प्रश्न 2 pages में फैला है:
-    start_page और end_page का अंतर उसी अनुसार रखें।
-
-11. यदि कोई प्रश्न 3 pages में फैला है:
-    start_page और end_page उसी अनुसार रखें।
+{RUBRICS[paper]}
 
 ============================================================
-PAGE COMMENT RULE
+MARKING RULES
 ============================================================
 
-हर page के लिए examiner-style substantive comment दें।
+1. यदि उत्तर 2 pages में है:
+   Max Marks = 8
+   Obtained Marks HARD CAP = 5.5
 
-महत्वपूर्ण:
+2. यदि उत्तर 3 pages में है:
+   Max Marks = 12
+   Obtained Marks HARD CAP = 8.5
 
-- केवल 3-5 शब्द के comments बिल्कुल नहीं।
-- "भूमिका स्पष्ट"
-- "विश्लेषण अच्छा"
-- "डेटा जोड़ें"
+3. Question के answer का वास्तविक अंतिम page ही end_page होगा।
 
-जैसे बहुत छोटे comments अकेले न दें।
+4. Question के marks केवल उसी end_page पर लगाए जाएंगे।
 
-हर page की कुल टिप्पणी लगभग 15 से 40 हिंदी शब्दों की हो।
+5. Marks को केवल page count देखकर नहीं दें।
+   Content quality, relevance, analysis, facts, structure,
+   value addition और paper-specific rubric के आधार पर दें।
 
-टिप्पणी में वास्तविक evaluation होना चाहिए।
+6. 8 marks question में 5.5 से ऊपर कभी न दें।
 
-उदाहरण:
-
-"उत्तर में मूल अवधारणा स्पष्ट रूप से प्रस्तुत की गई है,
-लेकिन तर्कों को समकालीन उदाहरणों से जोड़ने तथा उत्तर प्रदेश
-के विशेष संदर्भ को शामिल करने से उत्तर अधिक प्रभावी बन सकता था।"
-
-या:
-
-"तथ्यात्मक सामग्री पर्याप्त है और उत्तर का क्रम व्यवस्थित है,
-लेकिन कारण एवं परिणाम के बीच संबंध को अधिक स्पष्ट करने की
-आवश्यकता है। निष्कर्ष में समाधानपरक दृष्टिकोण जोड़ा जा सकता है।"
+7. 12 marks question में 8.5 से ऊपर कभी न दें।
 
 ============================================================
-QUESTION END MARK
+EXAMINER STYLE
 ============================================================
 
-हर question के लिए:
+Evaluation ऐसा दिखना चाहिए जैसे किसी अनुभवी examiner ने
+उत्तर पुस्तिका पर लाल पेन से checking की हो।
 
-- question_number
-- start_page
-- end_page
-- pages_used
-- max_marks
-- obtained_marks
-- end_page_comment
+इसलिए:
 
-देना है।
-
-end_page पर marks दिखेंगे।
-
-उदाहरण:
-
-Q1
-5.0 / 8
-
-या
-
-Q2
-7.5 / 12
+✓ अच्छे तथ्य/उदाहरण/डेटा/argument पर red tick लगाएँ।
+✓ गलत तथ्य, गलत terminology, inappropriate wording,
+  unsupported claim या स्पष्ट conceptual error पर red circle लगाएँ।
+✓ जहाँ सुधार आवश्यक है वहाँ छोटा लेकिन substantive examiner comment दें।
+✓ केवल 3-5 शब्द के generic comments न दें।
+✓ प्रत्येक page की comments कुल लगभग 15-40 शब्द की हों।
+✓ Comments answer के relevant हिस्से के पास लगाने योग्य हों।
+✓ अनावश्यक रूप से हर लाइन पर annotation न करें।
+✓ केवल महत्वपूर्ण और वास्तविक mistakes/high-value points चुनें।
 
 ============================================================
-FIRST PAGE SCORE
+WRONG WORD / INAPPROPRIATE WORD
 ============================================================
 
-पहले page के LEFT SIDE में एक circular examiner box में:
+यदि कोई गलत/अनुचित शब्द या phrase दिखे:
 
-प्राप्तांक
-14.5 / 20
+type = "wrong"
 
-जैसा total score दिखाया जाएगा।
+exact_text = वही दिखने वाला शब्द/phrase
+
+reason = संक्षेप में समस्या
+
+box_2d = उस शब्द/phrase की location
+
+उस location पर final PDF में लाल oval/circle बनेगा।
+
+यदि कोई अच्छा point/fact/data/example दिखे:
+
+type = "good"
+
+उस location पर लाल tick बनेगा।
+
+अस्पष्ट handwriting को अनुमान से गलत न मानें।
 
 ============================================================
-EXAMINER COMMENTS
+BOUNDING BOX
 ============================================================
 
-Comments हिंदी में हों।
+हर bbox:
 
-Examiner की भाषा में लिखें।
+[ymin, xmin, ymax, xmax]
 
-सुझावों में आवश्यकता होने पर:
+format में दें।
 
-- UP-specific examples
-- current data
-- committee/report
-- constitutional provision
-- diagram
-- map
-- flowchart
-- conclusion
-- analytical depth
-
-का उल्लेख करें।
-
-लेकिन comment केवल वही दें जो actual answer को देखकर
-उपयोगी हो।
+सभी values 0-1000 normalized हों।
 
 ============================================================
 OUTPUT
 ============================================================
 
-केवल valid JSON दें।
-
-JSON structure:
+केवल valid JSON दें:
 
 {{
-    "total_obtained_marks": 12.5,
-    "total_max_marks": 20,
+  "total_obtained_marks": 0,
+  "total_max_marks": 0,
 
-    "questions": [
-        {{
-            "question_number": 1,
-            "start_page": 1,
-            "end_page": 2,
-            "pages_used": 2,
-            "max_marks": 8,
-            "obtained_marks": 5.0,
-            "end_page_comment":
-            "उत्तर की मूल अवधारणा स्पष्ट है और तर्क का क्रम उचित है, लेकिन उत्तर प्रदेश से संबंधित उदाहरण तथा अधिक विश्लेषणात्मक निष्कर्ष जोड़ने से इसकी गुणवत्ता बेहतर हो सकती थी।"
-        }},
-        {{
-            "question_number": 2,
-            "start_page": 3,
-            "end_page": 5,
-            "pages_used": 3,
-            "max_marks": 12,
-            "obtained_marks": 7.5,
-            "end_page_comment":
-            "उत्तर में विषय के प्रमुख आयाम शामिल किए गए हैं, लेकिन कारण-परिणाम संबंध को अधिक स्पष्ट करने और निष्कर्ष को समाधानपरक बनाने की आवश्यकता है।"
-        }}
-    ],
+  "questions": [
+    {{
+      "question_number": 1,
+      "start_page": 1,
+      "end_page": 2,
+      "pages_used": 2,
+      "max_marks": 8,
+      "obtained_marks": 5.0,
+      "end_page_comment":
+      "यहाँ 15-40 शब्द की substantive examiner टिप्पणी हो।"
+    }}
+  ],
 
-    "page_comments": [
-        {{
-            "page": 1,
-            "comment":
-            "भूमिका विषय के अनुरूप है और उत्तर की दिशा प्रारंभ से स्पष्ट दिखाई देती है, हालांकि मुख्य तर्क को अधिक प्रभावी बनाने के लिए प्रासंगिक तथ्य या उदाहरण का संक्षिप्त प्रयोग किया जा सकता था।"
-        }},
-        {{
-            "page": 2,
-            "comment":
-            "उत्तर में तथ्यात्मक सामग्री अच्छी है, लेकिन विभिन्न बिंदुओं के बीच तार्किक संबंध और अधिक स्पष्ट किया जा सकता था। उत्तर प्रदेश का संदर्भ उत्तर को अधिक परीक्षा-उपयोगी बनाता।"
-        }}
-    ],
+  "page_comments": [
+    {{
+      "page": 1,
+      "comment":
+      "यहाँ 15-40 शब्द की substantive टिप्पणी हो।",
+      "side": "right",
+      "anchor": [400, 500, 550, 800]
+    }}
+  ],
 
-    "overall_feedback":
-    "उत्तर की संरचना अच्छी है लेकिन विश्लेषणात्मक गहराई और उदाहरणों के प्रयोग में सुधार की आवश्यकता है।",
+  "annotations": [
+    {{
+      "page": 1,
+      "type": "wrong",
+      "exact_text": "गलत या अनुचित शब्द",
+      "reason": "क्यों गलत/अनुचित है",
+      "box_2d": [400, 500, 450, 650]
+    }},
+    {{
+      "page": 1,
+      "type": "good",
+      "exact_text": "अच्छा तथ्य",
+      "box_2d": [600, 300, 650, 450]
+    }}
+  ],
 
-    "improvements": [
-        "उत्तर प्रदेश के विशिष्ट उदाहरणों और समकालीन आंकड़ों का प्रयोग बढ़ाएं।",
-        "निष्कर्ष को अधिक समाधानपरक और भविष्य की दिशा बताने वाला बनाएं।"
-    ]
+  "overall_feedback":
+  "समग्र मूल्यांकन",
+
+  "improvements": [
+    "सुधार सुझाव 1",
+    "सुधार सुझाव 2"
+  ]
 }}
 
-============================================================
-अत्यंत महत्वपूर्ण
-============================================================
-
-JSON के बाहर कोई explanation या markdown न दें।
-
-गलत page numbering न करें।
-
-Question का end_page वही रखें जहाँ उसका उत्तर वास्तव में समाप्त होता है।
+महत्वपूर्ण:
+- Page numbers 1-based हैं।
+- Question end_page वास्तविक answer ending के आधार पर दें।
+- गलत शब्द के आसपास circle लगाने योग्य tight bbox दें।
+- Good point पर tick लगाने योग्य bbox दें।
 """
 
 
+def call_gemini(images, paper):
+
+    parts = []
+
+    for image_bytes in images:
+
+        parts.append(
+            {
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": base64.b64encode(
+                        image_bytes
+                    ).decode()
+                }
+            }
+        )
+
     parts.append(
         {
-            "text": prompt
+            "text": build_prompt(
+                paper,
+                len(images)
+            )
         }
     )
 
@@ -453,21 +406,18 @@ Question का end_page वही रखें जहाँ उसका उत
             }
         ],
         "generationConfig": {
-            "response_mime_type": "application/json"
+            "response_mime_type": "application/json",
+            "temperature": 0.2
         }
     }
 
     last_error = ""
 
-    # --------------------------------------------------------
-    # MODEL FALLBACK
-    # --------------------------------------------------------
-
-    for model_name in ACTIVE_MODELS:
+    for model in MODELS:
 
         url = (
             "https://generativelanguage.googleapis.com/"
-            f"v1beta/models/{model_name}:generateContent"
+            f"v1beta/models/{model}:generateContent"
             f"?key={GEMINI_API_KEY}"
         )
 
@@ -476,224 +426,54 @@ Question का end_page वही रखें जहाँ उसका उत
             response = requests.post(
                 url,
                 json=payload,
-                headers={
-                    "Content-Type":
-                    "application/json"
-                },
-                timeout=120
-            )
-
-            print(
-                f"Gemini {model_name}: "
-                f"HTTP {response.status_code}"
+                timeout=180
             )
 
             if response.status_code == 200:
 
-                data = response.json()
-
-                candidates = data.get(
-                    "candidates",
-                    []
+                raw = (
+                    response
+                    .json()
+                    ["candidates"][0]
+                    ["content"]["parts"][0]
+                    ["text"]
                 )
 
-                if not candidates:
-                    raise Exception(
-                        "Gemini returned no candidates."
-                    )
-
-                content = candidates[0].get(
-                    "content",
-                    {}
+                return normalize_result(
+                    json.loads(raw),
+                    len(images)
                 )
 
-                response_parts = content.get(
-                    "parts",
-                    []
-                )
+            last_error = (
+                f"{model}: HTTP "
+                f"{response.status_code} "
+                f"{response.text[:200]}"
+            )
 
-                if not response_parts:
-                    raise Exception(
-                        "Gemini returned empty response."
-                    )
-
-                raw_text = response_parts[0].get(
-                    "text",
-                    ""
-                )
-
-                clean_text = (
-                    raw_text
-                    .replace("```json", "")
-                    .replace("```", "")
-                    .strip()
-                )
-
-                result = json.loads(
-                    clean_text
-                )
-
-                return normalize_evaluation(
-                    result,
-                    total_pages
-                )
-
-            elif response.status_code in [
+            if response.status_code not in (
                 429,
                 500,
                 502,
                 503,
                 504
-            ]:
-
-                last_error = (
-                    f"{model_name}: "
-                    f"HTTP {response.status_code}"
-                )
-
-                continue
-
-            else:
-
-                last_error = (
-                    f"{model_name}: "
-                    f"{response.text[:300]}"
-                )
+            ):
+                break
 
         except Exception as e:
-
-            last_error = (
-                f"{model_name}: {str(e)}"
-            )
-
-            print(
-                "Gemini error:",
-                last_error
-            )
-
-            continue
+            last_error = str(e)
 
     raise Exception(
-        "AI मूल्यांकन में समस्या: "
+        "Gemini evaluation failed: "
         + last_error
     )
 
 
-# ============================================================
-# MARKING LIMITS
-# ============================================================
+def normalize_result(data, pages):
 
-def apply_question_marking_rules(
-    question
-):
-
-    try:
-
-        pages_used = int(
-            question.get(
-                "pages_used",
-                2
-            )
-        )
-
-    except Exception:
-
-        pages_used = 2
-
-    # --------------------------------------------------------
-    # 2 PAGE ANSWER
-    # --------------------------------------------------------
-
-    if pages_used == 2:
-
-        max_marks = 8
-        hard_limit = 5.5
-
-    # --------------------------------------------------------
-    # 3 PAGE ANSWER
-    # --------------------------------------------------------
-
-    elif pages_used == 3:
-
-        max_marks = 12
-        hard_limit = 8.5
-
-    # --------------------------------------------------------
-    # SAFETY FALLBACK
-    # --------------------------------------------------------
-
-    else:
-
-        # User's requested system is specifically
-        # 2-page / 8-mark and 3-page / 12-mark.
-        # For unexpected page counts we infer the closest rule.
-
-        if pages_used <= 2:
-
-            max_marks = 8
-            hard_limit = 5.5
-
-        else:
-
-            max_marks = 12
-            hard_limit = 8.5
-
-    try:
-
-        obtained = float(
-            question.get(
-                "obtained_marks",
-                0
-            )
-        )
-
-    except Exception:
-
-        obtained = 0.0
-
-    obtained = max(
-        0,
-        min(
-            obtained,
-            hard_limit
-        )
-    )
-
-    question["pages_used"] = pages_used
-    question["max_marks"] = max_marks
-    question["obtained_marks"] = round(
-        obtained,
-        1
-    )
-
-    return question
-
-
-# ============================================================
-# NORMALIZE GEMINI OUTPUT
-# ============================================================
-
-def normalize_evaluation(
-    data,
-    total_pages
-):
-
-    questions = data.get(
-        "questions",
-        []
-    )
-
-    if not isinstance(
-        questions,
-        list
-    ):
-
-        questions = []
-
-    normalized_questions = []
+    questions = []
 
     for index, question in enumerate(
-        questions
+        data.get("questions", [])
     ):
 
         if not isinstance(
@@ -702,43 +482,13 @@ def normalize_evaluation(
         ):
             continue
 
-        # ----------------------------------------------------
-        # Question number
-        # ----------------------------------------------------
-
         try:
-
-            q_no = int(
-                question.get(
-                    "question_number",
-                    index + 1
-                )
-            )
-
-        except Exception:
-
-            q_no = index + 1
-
-        question["question_number"] = q_no
-
-        # ----------------------------------------------------
-        # Start / End Page
-        # ----------------------------------------------------
-
-        try:
-
             start_page = int(
                 question.get(
                     "start_page",
                     1
                 )
             )
-
-        except Exception:
-
-            start_page = 1
-
-        try:
 
             end_page = int(
                 question.get(
@@ -748,22 +498,22 @@ def normalize_evaluation(
             )
 
         except Exception:
-
-            end_page = start_page
+            start_page = 1
+            end_page = 1
 
         start_page = max(
             1,
             min(
-                start_page,
-                total_pages
+                pages,
+                start_page
             )
         )
 
         end_page = max(
             start_page,
             min(
-                end_page,
-                total_pages
+                pages,
+                end_page
             )
         )
 
@@ -773,153 +523,99 @@ def normalize_evaluation(
             + 1
         )
 
-        # User's marking system is based
-        # on 2 or 3 pages.
-        question["start_page"] = start_page
-        question["end_page"] = end_page
-        question["pages_used"] = pages_used
-
-        # ----------------------------------------------------
-        # Apply hard marking limits
-        # ----------------------------------------------------
-
-        question = (
-            apply_question_marking_rules(
-                question
-            )
-        )
-
-        # ----------------------------------------------------
-        # Comment
-        # ----------------------------------------------------
-
-        comment = str(
-            question.get(
-                "end_page_comment",
-                ""
-            )
-        ).strip()
-
-        if not comment:
-
-            comment = (
-                "उत्तर की प्रस्तुति और विषयगत समझ संतोषजनक है, "
-                "लेकिन अधिक विश्लेषण, प्रासंगिक उदाहरण तथा "
-                "समकालीन संदर्भ जोड़ने से उत्तर की गुणवत्ता बेहतर हो सकती है।"
-            )
-
-        question[
-            "end_page_comment"
-        ] = comment
-
-        normalized_questions.append(
-            question
-        )
-
-    # --------------------------------------------------------
-    # Page comments
-    # --------------------------------------------------------
-
-    raw_page_comments = data.get(
-        "page_comments",
-        []
-    )
-
-    if not isinstance(
-        raw_page_comments,
-        list
-    ):
-
-        raw_page_comments = []
-
-    page_comments = {}
-
-    for item in raw_page_comments:
-
-        if not isinstance(
-            item,
-            dict
-        ):
-            continue
+        if pages_used <= 2:
+            max_marks = 8
+            hard_cap = 5.5
+        else:
+            max_marks = 12
+            hard_cap = 8.5
 
         try:
-
-            page_number = int(
-                item.get(
-                    "page",
+            obtained = float(
+                question.get(
+                    "obtained_marks",
                     0
                 )
             )
-
         except Exception:
+            obtained = 0
 
-            continue
-
-        if (
-            page_number < 1
-            or page_number > total_pages
-        ):
-            continue
-
-        comment = str(
-            item.get(
-                "comment",
-                ""
-            )
-        ).strip()
-
-        if comment:
-
-            page_comments[
-                page_number
-            ] = comment
-
-    # --------------------------------------------------------
-    # Calculate totals ourselves
-    # --------------------------------------------------------
-
-    total_obtained = sum(
-        float(
-            q.get(
-                "obtained_marks",
-                0
+        obtained = max(
+            0,
+            min(
+                obtained,
+                hard_cap
             )
         )
-        for q in normalized_questions
+
+        questions.append(
+            {
+                "question_number": int(
+                    question.get(
+                        "question_number",
+                        index + 1
+                    )
+                ),
+                "start_page": start_page,
+                "end_page": end_page,
+                "pages_used": pages_used,
+                "max_marks": max_marks,
+                "obtained_marks": round(
+                    obtained,
+                    1
+                ),
+                "end_page_comment": str(
+                    question.get(
+                        "end_page_comment",
+                        ""
+                    )
+                ).strip()
+            }
+        )
+
+    total_obtained = round(
+        sum(
+            q["obtained_marks"]
+            for q in questions
+        ),
+        1
     )
 
-    total_max = sum(
-        float(
-            q.get(
-                "max_marks",
-                0
-            )
-        )
-        for q in normalized_questions
+    total_max = round(
+        sum(
+            q["max_marks"]
+            for q in questions
+        ),
+        1
     )
 
     return {
-        "total_obtained_marks": round(
+        "total_obtained_marks":
             total_obtained,
-            1
-        ),
 
-        "total_max_marks": round(
+        "total_max_marks":
             total_max,
-            1
-        ),
 
         "questions":
-            normalized_questions,
+            questions,
 
         "page_comments":
-            page_comments,
+            data.get(
+                "page_comments",
+                []
+            ),
+
+        "annotations":
+            data.get(
+                "annotations",
+                []
+            ),
 
         "overall_feedback":
             str(
                 data.get(
                     "overall_feedback",
-                    "मूल्यांकन संपन्न हुआ।"
+                    ""
                 )
             ),
 
@@ -930,33 +626,25 @@ def normalize_evaluation(
                     "improvements",
                     []
                 )
-                if str(x).strip()
-            ]
+            ][:6]
     }
 
-
-# ============================================================
-# HINDI TEXT WRAP
-# ============================================================
 
 def wrap_text(
     draw,
     text,
-    font,
+    fnt,
     max_width
 ):
 
     words = str(text).split()
-
-    if not words:
-        return [""]
 
     lines = []
     current = ""
 
     for word in words:
 
-        test_line = (
+        test = (
             word
             if not current
             else current + " " + word
@@ -964,18 +652,15 @@ def wrap_text(
 
         bbox = draw.textbbox(
             (0, 0),
-            test_line,
-            font=font
+            test,
+            font=fnt
         )
 
-        width = (
-            bbox[2]
-            - bbox[0]
-        )
-
-        if width <= max_width:
-
-            current = test_line
+        if (
+            bbox[2] - bbox[0]
+            <= max_width
+        ):
+            current = test
 
         else:
 
@@ -991,254 +676,179 @@ def wrap_text(
             current
         )
 
-    return lines
+    return lines or [""]
 
 
-# ============================================================
-# HINDI COMMENT BADGE
-# ============================================================
-
-def create_hindi_comment_badge(
+def make_comment_badge(
     text,
-    width=900,
-    font_size=38,
-    padding_x=35,
-    padding_y=28
+    width=1400,
+    font_size=52
 ):
-    """
-    15-40 शब्द के examiner comments के लिए
-    बड़ा readable Hindi image badge.
-    """
 
-    text = str(text).strip()
-
-    if not text:
-
-        text = (
-            "उत्तर की प्रस्तुति संतोषजनक है, "
-            "लेकिन विश्लेषण और उदाहरणों में और सुधार की आवश्यकता है।"
-        )
-
-    font = get_hindi_font(
+    fnt = font(
         font_size
     )
 
-    # Temporary canvas
+    padding = 40
+
     temp = Image.new(
         "RGB",
-        (width, 1200),
-        color=(255, 247, 247)
+        (width, 1400),
+        (255, 250, 250)
     )
 
     draw = ImageDraw.Draw(
         temp
     )
 
-    max_text_width = (
-        width
-        - 2 * padding_x
-    )
-
     lines = wrap_text(
         draw,
         text,
-        font,
-        max_text_width
+        fnt,
+        width - 2 * padding
     )
 
-    line_heights = []
+    heights = []
 
     for line in lines:
 
         bbox = draw.textbbox(
             (0, 0),
             line,
-            font=font
+            font=fnt
         )
 
-        line_heights.append(
-            bbox[3]
-            - bbox[1]
+        heights.append(
+            bbox[3] - bbox[1]
         )
 
-    line_spacing = 14
-
-    text_height = (
-        sum(line_heights)
-        + line_spacing
-        * max(
-            0,
-            len(lines) - 1
-        )
-    )
-
-    height = (
-        text_height
-        + 2 * padding_y
-    )
+    line_gap = 18
 
     height = max(
-        height,
-        180
+        220,
+        sum(heights)
+        + line_gap * (
+            len(lines) - 1
+        )
+        + 2 * padding
     )
 
-    img = Image.new(
+    image = Image.new(
         "RGB",
         (width, height),
-        color=(255, 247, 247)
+        (255, 250, 250)
     )
 
     draw = ImageDraw.Draw(
-        img
+        image
     )
-
-    # --------------------------------------------------------
-    # Red examiner border
-    # --------------------------------------------------------
 
     draw.rounded_rectangle(
-        [
-            4,
-            4,
-            width - 5,
-            height - 5
-        ],
-        radius=18,
-        outline=(185, 0, 0),
-        width=5
+        (
+            5,
+            5,
+            width - 6,
+            height - 6
+        ),
+        radius=24,
+        outline=(170, 0, 0),
+        width=7
     )
 
-    # --------------------------------------------------------
-    # Hindi text
-    # --------------------------------------------------------
-
-    y = padding_y
+    y = padding
 
     for line, line_height in zip(
         lines,
-        line_heights
+        heights
     ):
 
         bbox = draw.textbbox(
             (0, 0),
             line,
-            font=font
+            font=fnt
         )
 
         text_width = (
-            bbox[2]
-            - bbox[0]
+            bbox[2] - bbox[0]
         )
 
-        x = max(
-            padding_x,
-            (
-                width
-                - text_width
-            ) // 2
-        )
+        x = (
+            width - text_width
+        ) // 2
 
         draw.text(
             (x, y),
             line,
-            font=font,
-            fill=(170, 0, 0)
+            font=fnt,
+            fill=(160, 0, 0)
         )
 
         y += (
             line_height
-            + line_spacing
+            + line_gap
         )
 
     output = io.BytesIO()
 
-    img.save(
+    image.save(
         output,
-        format="PNG"
+        "PNG"
     )
 
     return output.getvalue()
 
 
-# ============================================================
-# SCORE CIRCLE IMAGE
-# ============================================================
-
-def create_score_circle_image(
+def make_score_badge(
     obtained,
     total
 ):
 
-    size = 520
+    size = 900
 
-    img = Image.new(
+    image = Image.new(
         "RGBA",
         (size, size),
         (255, 255, 255, 0)
     )
 
     draw = ImageDraw.Draw(
-        img
+        image
     )
-
-    # --------------------------------------------------------
-    # Circle
-    # --------------------------------------------------------
 
     draw.ellipse(
-        [
-            8,
-            8,
-            size - 8,
-            size - 8
-        ],
-        outline=(175, 0, 0),
-        width=10,
-        fill=(255, 248, 248)
+        (
+            12,
+            12,
+            size - 12,
+            size - 12
+        ),
+        fill=(255, 250, 250),
+        outline=(170, 0, 0),
+        width=14
     )
 
-    # --------------------------------------------------------
-    # Fonts
-    # --------------------------------------------------------
-
-    small_font = get_hindi_font(
-        42
-    )
-
-    big_font = get_hindi_font(
-        68
-    )
-
-    # --------------------------------------------------------
-    # "प्राप्तांक"
-    # --------------------------------------------------------
+    title_font = font(62)
+    score_font = font(96)
 
     title = "प्राप्तांक"
 
     bbox = draw.textbbox(
         (0, 0),
         title,
-        font=small_font
-    )
-
-    title_width = (
-        bbox[2]
-        - bbox[0]
+        font=title_font
     )
 
     draw.text(
         (
-            (size - title_width) // 2,
-            100
+            (size - (
+                bbox[2] - bbox[0]
+            )) // 2,
+            150
         ),
         title,
-        font=small_font,
-        fill=(150, 0, 0)
+        font=title_font,
+        fill=(160, 0, 0)
     )
-
-    # --------------------------------------------------------
-    # Score
-    # --------------------------------------------------------
 
     score = (
         f"{obtained:g} / {total:g}"
@@ -1247,220 +857,497 @@ def create_score_circle_image(
     bbox = draw.textbbox(
         (0, 0),
         score,
-        font=big_font
-    )
-
-    score_width = (
-        bbox[2]
-        - bbox[0]
+        font=score_font
     )
 
     draw.text(
         (
-            (size - score_width) // 2,
-            185
+            (size - (
+                bbox[2] - bbox[0]
+            )) // 2,
+            340
         ),
         score,
-        font=big_font,
-        fill=(150, 0, 0)
+        font=score_font,
+        fill=(160, 0, 0)
     )
 
     output = io.BytesIO()
 
-    img.save(
+    image.save(
         output,
-        format="PNG"
+        "PNG"
     )
 
     return output.getvalue()
 
 
-# ============================================================
-# QUESTION MARK BADGE
-# ============================================================
-
-def create_question_marks_badge(
+def make_marks_badge(
     question_number,
     obtained,
-    max_marks
+    total
 ):
+
+    fnt = font(46)
 
     text = (
         f"Q{question_number}   "
-        f"{obtained:g} / {max_marks:g}"
+        f"{obtained:g}/{total:g}"
     )
 
-    font = get_hindi_font(
-        30
-    )
+    width = 650
+    height = 150
 
-    width = 420
-    height = 125
-
-    img = Image.new(
+    image = Image.new(
         "RGB",
         (width, height),
-        color=(255, 247, 247)
+        (255, 250, 250)
     )
 
     draw = ImageDraw.Draw(
-        img
+        image
     )
 
     draw.rounded_rectangle(
-        [
-            4,
-            4,
-            width - 5,
-            height - 5
-        ],
-        radius=15,
-        outline=(175, 0, 0),
-        width=5
+        (
+            5,
+            5,
+            width - 6,
+            height - 6
+        ),
+        radius=18,
+        outline=(170, 0, 0),
+        width=7
     )
 
     bbox = draw.textbbox(
         (0, 0),
         text,
-        font=font
+        font=fnt
     )
-
-    text_width = (
-        bbox[2]
-        - bbox[0]
-    )
-
-    text_height = (
-        bbox[3]
-        - bbox[1]
-    )
-
-    x = (
-        width
-        - text_width
-    ) // 2
-
-    y = (
-        height
-        - text_height
-    ) // 2
 
     draw.text(
-        (x, y),
+        (
+            (width - (
+                bbox[2] - bbox[0]
+            )) // 2,
+            (height - (
+                bbox[3] - bbox[1]
+            )) // 2
+        ),
         text,
-        font=font,
-        fill=(165, 0, 0)
+        font=fnt,
+        fill=(160, 0, 0)
     )
 
     output = io.BytesIO()
 
-    img.save(
+    image.save(
         output,
-        format="PNG"
+        "PNG"
     )
 
     return output.getvalue()
 
 
-# ============================================================
-# CREATE ANNOTATED PDF
-# ============================================================
-
-def create_rich_annotated_pdf(
-    pdf_doc,
-    eval_data
+def draw_arrow(
+    page,
+    x1,
+    y1,
+    x2,
+    y2
 ):
 
-    total_obtained = eval_data.get(
-        "total_obtained_marks",
-        0
+    page.draw_line(
+        fitz.Point(x1, y1),
+        fitz.Point(x2, y2),
+        color=(0.65, 0, 0),
+        width=1.7
     )
 
-    total_max = eval_data.get(
-        "total_max_marks",
-        0
+    dx = x1 - x2
+    dy = y1 - y2
+
+    length = max(
+        (dx * dx + dy * dy) ** 0.5,
+        1
     )
 
-    questions = eval_data.get(
-        "questions",
-        []
+    ux = dx / length
+    uy = dy / length
+
+    p = fitz.Point(
+        x2 + ux * 8,
+        y2 + uy * 8
     )
 
-    page_comments = eval_data.get(
-        "page_comments",
-        {}
+    q = fitz.Point(
+        x2 - uy * 6 + ux * 8,
+        y2 + ux * 6 + uy * 8
     )
 
-    total_pages = len(
-        pdf_doc
+    r = fitz.Point(
+        x2 + uy * 6 + ux * 8,
+        y2 - ux * 6 + uy * 8
     )
 
-    # ========================================================
-    # QUESTION MARKS MAP
-    # ========================================================
+    page.draw_polyline(
+        [p, q, r, p],
+        color=(0.65, 0, 0),
+        fill=(0.65, 0, 0)
+    )
 
-    question_marks_by_page = {}
 
-    for question in questions:
+def add_circle(
+    page,
+    box,
+    page_width,
+    page_height
+):
 
-        end_page = int(
-            question.get(
-                "end_page",
-                1
+    ymin, xmin, ymax, xmax = [
+        max(
+            0,
+            min(
+                1000,
+                int(v)
             )
         )
+        for v in box
+    ]
 
-        if end_page < 1:
-            end_page = 1
+    x1 = (
+        page_width
+        * xmin
+        / 1000
+    )
 
-        if end_page > total_pages:
-            end_page = total_pages
+    x2 = (
+        page_width
+        * xmax
+        / 1000
+    )
 
-        question_marks_by_page.setdefault(
-            end_page,
+    y1 = (
+        page_height
+        * ymin
+        / 1000
+    )
+
+    y2 = (
+        page_height
+        * ymax
+        / 1000
+    )
+
+    pad_x = max(
+        3,
+        (x2 - x1) * 0.10
+    )
+
+    pad_y = max(
+        3,
+        (y2 - y1) * 0.25
+    )
+
+    rect = fitz.Rect(
+        max(
+            0,
+            x1 - pad_x
+        ),
+        max(
+            0,
+            y1 - pad_y
+        ),
+        min(
+            page_width,
+            x2 + pad_x
+        ),
+        min(
+            page_height,
+            y2 + pad_y
+        )
+    )
+
+    page.draw_oval(
+        rect,
+        color=(0.65, 0, 0),
+        width=2.2
+    )
+
+    return rect
+
+
+def add_tick(
+    page,
+    box,
+    page_width,
+    page_height
+):
+
+    ymin, xmin, ymax, xmax = [
+        max(
+            0,
+            min(
+                1000,
+                int(v)
+            )
+        )
+        for v in box
+    ]
+
+    x = (
+        page_width
+        * xmax
+        / 1000
+    ) + 5
+
+    y = (
+        page_height
+        * ymin
+        / 1000
+    )
+
+    page.draw_polyline(
+        [
+            fitz.Point(
+                x,
+                y + 6
+            ),
+            fitz.Point(
+                x + 5,
+                y + 12
+            ),
+            fitz.Point(
+                x + 15,
+                y
+            )
+        ],
+        color=(0.65, 0, 0),
+        width=2.4
+    )
+
+
+def place_comment(
+    page,
+    text,
+    anchor_box,
+    side,
+    page_width,
+    page_height,
+    occupied
+):
+
+    png = make_comment_badge(
+        text,
+        width=1400,
+        font_size=52
+    )
+
+    box_width = min(
+        190,
+        page_width * 0.27
+    )
+
+    box_height = min(
+        250,
+        page_height * 0.32
+    )
+
+    if side == "left":
+
+        x1 = 5
+        x2 = x1 + box_width
+
+    else:
+
+        x2 = page_width - 5
+        x1 = x2 - box_width
+
+    anchor_y = (
+        anchor_box[0]
+        / 1000
+        * page_height
+    )
+
+    y1 = max(
+        90,
+        min(
+            page_height
+            - box_height
+            - 10,
+            anchor_y - 20
+        )
+    )
+
+    candidates = [
+        y1,
+        max(
+            90,
+            y1 - 270
+        ),
+        min(
+            page_height
+            - box_height
+            - 10,
+            y1 + 270
+        )
+    ]
+
+    chosen = candidates[0]
+
+    for candidate in candidates:
+
+        rect = fitz.Rect(
+            x1,
+            candidate,
+            x2,
+            candidate + box_height
+        )
+
+        if all(
+            not rect.intersects(
+                old
+            )
+            for old in occupied
+        ):
+
+            chosen = candidate
+            break
+
+    rect = fitz.Rect(
+        x1,
+        chosen,
+        x2,
+        chosen + box_height
+    )
+
+    page.insert_image(
+        rect,
+        stream=png,
+        keep_proportion=True
+    )
+
+    ymin, xmin, ymax, xmax = anchor_box
+
+    anchor_x = (
+        (xmin + xmax)
+        / 2
+        / 1000
+        * page_width
+    )
+
+    anchor_y = (
+        (ymin + ymax)
+        / 2
+        / 1000
+        * page_height
+    )
+
+    start_x = (
+        x2
+        if side == "left"
+        else x1
+    )
+
+    start_y = (
+        chosen
+        + box_height / 2
+    )
+
+    draw_arrow(
+        page,
+        start_x,
+        start_y,
+        anchor_x,
+        anchor_y
+    )
+
+    occupied.append(rect)
+
+
+def annotate_pdf(
+    pdf,
+    result
+):
+
+    page_annotations = {}
+
+    for annotation in result.get(
+        "annotations",
+        []
+    ):
+
+        try:
+
+            page_number = int(
+                annotation.get(
+                    "page",
+                    1
+                )
+            )
+
+        except Exception:
+
+            continue
+
+        page_annotations.setdefault(
+            page_number,
+            []
+        ).append(
+            annotation
+        )
+
+    marks_by_page = {}
+
+    for question in result["questions"]:
+
+        marks_by_page.setdefault(
+            question["end_page"],
             []
         ).append(
             question
         )
 
-    # ========================================================
-    # PROCESS EVERY PAGE
-    # ========================================================
-
-    for page_index in range(
-        total_pages
+    for page_index, page in enumerate(
+        pdf
     ):
 
-        page = pdf_doc[
-            page_index
-        ]
-
-        page_width = (
-            page.rect.width
+        page_number = (
+            page_index + 1
         )
 
-        page_height = (
-            page.rect.height
-        )
+        page_width = page.rect.width
+        page_height = page.rect.height
 
-        # ====================================================
-        # FIRST PAGE LEFT SCORE CIRCLE
-        # ====================================================
+        occupied = []
 
-        if page_index == 0:
+        # ----------------------------------------------------
+        # FIRST PAGE SCORE CIRCLE
+        # ----------------------------------------------------
 
-            score_png = (
-                create_score_circle_image(
-                    total_obtained,
-                    total_max
-                )
+        if page_number == 1:
+
+            score_png = make_score_badge(
+                result[
+                    "total_obtained_marks"
+                ],
+                result[
+                    "total_max_marks"
+                ]
             )
 
             score_rect = fitz.Rect(
-                10,
-                15,
-                78,
-                83
+                8,
+                12,
+                min(
+                    110,
+                    page_width * 0.16
+                ),
+                min(
+                    114,
+                    page_height * 0.12
+                )
             )
 
             page.insert_image(
@@ -1469,153 +1356,265 @@ def create_rich_annotated_pdf(
                 keep_proportion=True
             )
 
-        # ====================================================
-        # PAGE COMMENT
-        # ====================================================
+        # ----------------------------------------------------
+        # WRONG / GOOD MARKS
+        # ----------------------------------------------------
 
-        page_number = (
-            page_index + 1
-        )
-
-        comment = page_comments.get(
+        for annotation in page_annotations.get(
             page_number,
-            ""
-        )
+            []
+        )[:6]:
 
-        if comment:
+            box = annotation.get(
+                "box_2d",
+                [0, 0, 0, 0]
+            )
 
-            comment_png = (
-                create_hindi_comment_badge(
-                    comment,
-                    width=1000,
-                    font_size=38
+            if annotation.get(
+                "type"
+            ) == "wrong":
+
+                add_circle(
+                    page,
+                    box,
+                    page_width,
+                    page_height
                 )
-            )
 
-            # -----------------------------------------------
-            # Right-side margin badge
-            # -----------------------------------------------
+            elif annotation.get(
+                "type"
+            ) == "good":
 
-            margin_width = min(
-                175,
-                page_width * 0.22
-            )
+                add_tick(
+                    page,
+                    box,
+                    page_width,
+                    page_height
+                )
 
-            x_right = (
-                page_width - 5
-            )
+        # ----------------------------------------------------
+        # PAGE COMMENTS
+        # ----------------------------------------------------
 
-            x_left = (
-                x_right
-                - margin_width
-            )
-
-            # Make badge tall enough for 15-40 words
-            target_top = 95
-
-            target_height = min(
-                220,
-                page_height * 0.32
-            )
-
-            target_rect = fitz.Rect(
-                x_left,
-                target_top,
-                x_right,
-                target_top + target_height
-            )
-
-            page.insert_image(
-                target_rect,
-                stream=comment_png,
-                keep_proportion=True
-            )
-
-        # ====================================================
-        # QUESTION END MARKS
-        # ====================================================
-
-        page_questions = (
-            question_marks_by_page.get(
-                page_number,
+        comments = [
+            item
+            for item in result.get(
+                "page_comments",
                 []
             )
-        )
+            if int(
+                item.get(
+                    "page",
+                    0
+                ) or 0
+            ) == page_number
+        ]
 
-        if page_questions:
+        for comment in comments[:2]:
 
-            # Put marks toward lower-right area,
-            # i.e. near answer ending.
-            y = (
-                page_height
-                - 70
-                - (
-                    len(page_questions)
-                    * 42
+            text = str(
+                comment.get(
+                    "comment",
+                    ""
                 )
+            ).strip()
+
+            if not text:
+                continue
+
+            anchor = comment.get(
+                "anchor",
+                [500, 450, 550, 550]
             )
 
-            for question in page_questions:
+            side = comment.get(
+                "side",
+                "right"
+            )
 
-                q_no = question.get(
-                    "question_number",
-                    1
+            place_comment(
+                page,
+                text,
+                anchor,
+                side,
+                page_width,
+                page_height,
+                occupied
+            )
+
+        # ----------------------------------------------------
+        # QUESTION END MARKS
+        # ----------------------------------------------------
+
+        questions = marks_by_page.get(
+            page_number,
+            []
+        )
+
+        if questions:
+
+            y = page_height - 48
+
+            for question in reversed(
+                questions
+            ):
+
+                marks_png = make_marks_badge(
+                    question[
+                        "question_number"
+                    ],
+                    question[
+                        "obtained_marks"
+                    ],
+                    question[
+                        "max_marks"
+                    ]
                 )
 
-                obtained = question.get(
-                    "obtained_marks",
-                    0
-                )
-
-                max_marks = question.get(
-                    "max_marks",
-                    8
-                )
-
-                marks_png = (
-                    create_question_marks_badge(
-                        q_no,
-                        obtained,
-                        max_marks
-                    )
-                )
-
-                rect = fitz.Rect(
-                    page_width - 105,
-                    y,
-                    page_width - 8,
-                    y + 35
+                marks_rect = fitz.Rect(
+                    page_width - 120,
+                    y - 30,
+                    page_width - 5,
+                    y
                 )
 
                 page.insert_image(
-                    rect,
+                    marks_rect,
                     stream=marks_png,
                     keep_proportion=True
                 )
 
-                y += 40
+                y -= 36
 
-    # ========================================================
-    # SAVE
-    # ========================================================
+        # ----------------------------------------------------
+        # QUESTION END COMMENT
+        # ----------------------------------------------------
+
+        for question in questions:
+
+            text = question.get(
+                "end_page_comment",
+                ""
+            ).strip()
+
+            if not text:
+                continue
+
+            already = any(
+                str(
+                    c.get(
+                        "comment",
+                        ""
+                    )
+                ).strip()
+                == text
+                for c in comments
+            )
+
+            if already:
+                continue
+
+            place_comment(
+                page,
+                text,
+                [800, 450, 930, 900],
+                "right",
+                page_width,
+                page_height,
+                occupied
+            )
 
     output = io.BytesIO()
 
-    pdf_doc.save(
+    pdf.save(
         output,
         garbage=4,
         deflate=True
     )
 
-    pdf_doc.close()
+    pdf.close()
 
     output.seek(0)
 
     return output
 
 
+def process_submission(
+    path,
+    paper
+):
+
+    extension = (
+        Path(path)
+        .suffix
+        .lower()
+    )
+
+    if extension == ".pdf":
+
+        pdf = fitz.open(path)
+
+        images = image_pages_from_pdf(
+            pdf
+        )
+
+    else:
+
+        image = Image.open(
+            path
+        ).convert(
+            "RGB"
+        )
+
+        buffer = io.BytesIO()
+
+        image.save(
+            buffer,
+            "JPEG",
+            quality=88
+        )
+
+        image_bytes = (
+            buffer.getvalue()
+        )
+
+        pdf = fitz.open()
+
+        page = pdf.new_page(
+            width=image.width,
+            height=image.height
+        )
+
+        page.insert_image(
+            page.rect,
+            stream=image_bytes
+        )
+
+        images = [
+            image_bytes
+        ]
+
+    if not images:
+
+        raise Exception(
+            "कोई page नहीं मिला।"
+        )
+
+    result = call_gemini(
+        images,
+        paper
+    )
+
+    final_pdf = annotate_pdf(
+        pdf,
+        result
+    )
+
+    return final_pdf, result
+
+
 # ============================================================
-# TELEGRAM START / HELP
+# TELEGRAM
 # ============================================================
 
 if bot:
@@ -1626,24 +1625,17 @@ if bot:
             "help"
         ]
     )
-    def send_welcome(message):
+    def welcome(message):
 
         bot.reply_to(
             message,
 
             "🏛️ <b>PRANA PCS AI Mains Evaluator</b>\n\n"
-            "नमस्ते! अपनी उत्तर पुस्तिका की "
-            "<b>PDF फ़ाइल</b> या <b>फ़ोटो</b> भेजें।\n\n"
-            "AI आपकी कॉपी का प्रश्नवार एवं पृष्ठवार "
-            "मूल्यांकन करेगा।"
+            "अपनी answer copy की PDF/फोटो भेजें।\n"
+            "Copy receive होने के तुरंत बाद "
+            "Paper Name पूछा जाएगा।"
         )
 
-
-# ============================================================
-# ANSWER SHEET HANDLER
-# ============================================================
-
-if bot:
 
     @bot.message_handler(
         content_types=[
@@ -1651,392 +1643,232 @@ if bot:
             "photo"
         ]
     )
-    def handle_answer_sheet(
-        message
-    ):
-
-        chat_id = (
-            message.chat.id
-        )
-
-        status_msg = bot.reply_to(
-            message,
-
-            "⏳ <b>कॉपी प्राप्त हो गई है।</b>\n\n"
-            "PRANA PCS AI द्वारा "
-            "<b>प्रश्नवार एवं पृष्ठवार मूल्यांकन</b> "
-            "चल रहा है..."
-        )
-
-        pdf_doc = None
+    def receive_copy(message):
 
         try:
 
-            # =================================================
-            # CREATE PDF
-            # =================================================
-
-            pdf_doc = fitz.open()
-
-            images_b64 = []
-
-            # =================================================
-            # DOCUMENT
-            # =================================================
-
-            if (
-                message.content_type
-                == "document"
-            ):
+            if message.content_type == "document":
 
                 file_info = bot.get_file(
                     message.document.file_id
                 )
 
-                downloaded_file = (
-                    bot.download_file(
-                        file_info.file_path
-                    )
+                data = bot.download_file(
+                    file_info.file_path
                 )
 
                 filename = (
                     message.document.file_name
-                    or ""
-                ).lower()
+                    or "submission.pdf"
+                )
 
-                # ---------------------------------------------
-                # PDF
-                # ---------------------------------------------
+                suffix = (
+                    Path(filename)
+                    .suffix
+                    .lower()
+                    or ".bin"
+                )
 
-                if filename.endswith(
-                    ".pdf"
-                ):
-
-                    pdf_doc.close()
-
-                    pdf_doc = fitz.open(
-                        stream=downloaded_file,
-                        filetype="pdf"
-                    )
-
-                    for page in pdf_doc:
-
-                        pix = page.get_pixmap(
-                            dpi=100,
-                            alpha=False
-                        )
-
-                        jpeg_bytes = (
-                            pix.tobytes(
-                                "jpeg",
-                                jpg_quality=82
-                            )
-                        )
-
-                        images_b64.append(
-                            base64.b64encode(
-                                jpeg_bytes
-                            ).decode(
-                                "utf-8"
-                            )
-                        )
-
-                # ---------------------------------------------
-                # IMAGE FILE
-                # ---------------------------------------------
-
-                else:
-
-                    img = Image.open(
-                        io.BytesIO(
-                            downloaded_file
-                        )
-                    ).convert(
-                        "RGB"
-                    )
-
-                    img_stream = (
-                        io.BytesIO()
-                    )
-
-                    img.save(
-                        img_stream,
-                        format="JPEG",
-                        quality=82
-                    )
-
-                    jpeg_data = (
-                        img_stream.getvalue()
-                    )
-
-                    images_b64.append(
-                        base64.b64encode(
-                            jpeg_data
-                        ).decode(
-                            "utf-8"
-                        )
-                    )
-
-                    page = pdf_doc.new_page(
-                        width=img.width,
-                        height=img.height
-                    )
-
-                    page.insert_image(
-                        page.rect,
-                        stream=jpeg_data
-                    )
-
-            # =================================================
-            # PHOTO
-            # =================================================
-
-            elif (
-                message.content_type
-                == "photo"
-            ):
+            else:
 
                 file_info = bot.get_file(
                     message.photo[-1].file_id
                 )
 
-                downloaded_file = (
-                    bot.download_file(
-                        file_info.file_path
+                data = bot.download_file(
+                    file_info.file_path
+                )
+
+                filename = "submission.jpg"
+                suffix = ".jpg"
+
+            # Replace an older unanswered submission.
+            old = PENDING.pop(
+                message.chat.id,
+                None
+            )
+
+            if old:
+
+                try:
+                    os.remove(
+                        old["path"]
                     )
-                )
+                except Exception:
+                    pass
 
-                img = Image.open(
-                    io.BytesIO(
-                        downloaded_file
-                    )
-                ).convert(
-                    "RGB"
-                )
-
-                img_stream = (
-                    io.BytesIO()
-                )
-
-                img.save(
-                    img_stream,
-                    format="JPEG",
-                    quality=82
-                )
-
-                jpeg_data = (
-                    img_stream.getvalue()
-                )
-
-                images_b64.append(
-                    base64.b64encode(
-                        jpeg_data
-                    ).decode(
-                        "utf-8"
-                    )
-                )
-
-                page = pdf_doc.new_page(
-                    width=img.width,
-                    height=img.height
-                )
-
-                page.insert_image(
-                    page.rect,
-                    stream=jpeg_data
-                )
-
-            else:
-
-                raise Exception(
-                    "Unsupported file type."
-                )
-
-            # =================================================
-            # PAGE COUNT
-            # =================================================
-
-            total_pages = len(
-                pdf_doc
+            path = save_submission(
+                data,
+                suffix
             )
 
-            if total_pages == 0:
+            PENDING[
+                message.chat.id
+            ] = {
+                "path": path,
+                "filename": filename
+            }
 
-                raise Exception(
-                    "PDF में कोई page नहीं मिला।"
-                )
-
-            # =================================================
-            # GEMINI
-            # =================================================
-
-            eval_result = (
-                evaluate_with_gemini(
-                    images_b64,
-                    total_pages
-                )
+            ask_paper(
+                message
             )
 
-            total_obtained = (
-                eval_result.get(
-                    "total_obtained_marks",
-                    0
-                )
+        except Exception as e:
+
+            bot.reply_to(
+                message,
+                "⚠️ कॉपी receive नहीं हो सकी:\n"
+                f"{str(e)[:180]}"
             )
 
-            total_max = (
-                eval_result.get(
-                    "total_max_marks",
-                    0
+
+    @bot.message_handler(
+        content_types=[
+            "text"
+        ]
+    )
+    def paper_reply(message):
+
+        chat_id = (
+            message.chat.id
+        )
+
+        if chat_id not in PENDING:
+            return
+
+        paper = normalize_paper(
+            message.text.strip()
+        )
+
+        if not paper:
+
+            bot.reply_to(
+                message,
+
+                "❗ Paper पहचान नहीं पाया।\n\n"
+                "केवल <b>GS 1</b>, <b>GS 2</b>, "
+                "<b>GS 3</b>, <b>GS 4</b>, "
+                "<b>GS 5</b> या <b>GS 6</b> भेजें।"
+            )
+
+            return
+
+        item = PENDING.pop(
+            chat_id
+        )
+
+        status = bot.reply_to(
+            message,
+
+            f"⏳ <b>{paper} selected.</b>\n\n"
+            "अब copy का page-by-page evaluation "
+            "और examiner-style checking शुरू हो रही है..."
+        )
+
+        try:
+
+            final_pdf, result = (
+                process_submission(
+                    item["path"],
+                    paper
                 )
             )
 
-            feedback = (
-                eval_result.get(
-                    "overall_feedback",
-                    "मूल्यांकन संपन्न हुआ।"
+            try:
+                os.remove(
+                    item["path"]
                 )
-            )
-
-            improvements = (
-                eval_result.get(
-                    "improvements",
-                    []
-                )
-            )
-
-            # =================================================
-            # IMPROVEMENTS
-            # =================================================
-
-            if improvements:
-
-                imp_text = "\n".join(
-                    [
-                        f"• {item}"
-                        for item in improvements[:6]
-                    ]
-                )
-
-            else:
-
-                imp_text = (
-                    "• अतिरिक्त सुझाव उपलब्ध नहीं।"
-                )
-
-            # =================================================
-            # TELEGRAM CAPTION
-            # =================================================
-
-            result_caption = (
-                "🏛️ <b>PRANA PCS - मूल्यांकन रिपोर्ट</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎯 <b>कुल प्राप्तांक:</b> "
-                f"<code>{total_obtained:g} / "
-                f"{total_max:g}</code>\n\n"
-                f"📝 <b>समग्र समीक्षा:</b>\n"
-                f"{feedback}\n\n"
-                f"💡 <b>सुधार सुझाव:</b>\n"
-                f"{imp_text}\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>जाँची हुई प्रमाणित कॉपी नीचे संलग्न है 👇</i>"
-            )
-
-            # =================================================
-            # CREATE FINAL PDF
-            # =================================================
-
-            stamped_pdf = (
-                create_rich_annotated_pdf(
-                    pdf_doc,
-                    eval_result
-                )
-            )
-
-            pdf_doc = None
-
-            # =================================================
-            # DELETE STATUS
-            # =================================================
+            except Exception:
+                pass
 
             try:
 
                 bot.delete_message(
                     chat_id,
-                    status_msg.message_id
+                    status.message_id
                 )
 
             except Exception:
                 pass
 
-            # =================================================
-            # SEND PDF
-            # =================================================
+            improvements = "\n".join(
+                "• " + x
+                for x in result[
+                    "improvements"
+                ]
+            )
+
+            if not improvements:
+                improvements = (
+                    "• कोई अतिरिक्त सुझाव नहीं।"
+                )
+
+            caption = (
+                f"🏛️ <b>PRANA PCS — {paper} Evaluation</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"🎯 <b>प्राप्तांक:</b> "
+                f"<code>"
+                f"{result['total_obtained_marks']:g}"
+                f" / "
+                f"{result['total_max_marks']:g}"
+                f"</code>\n\n"
+                f"📝 <b>समग्र समीक्षा:</b>\n"
+                f"{result['overall_feedback']}\n\n"
+                f"💡 <b>सुधार:</b>\n"
+                f"{improvements}\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>Examiner-style evaluated copy 👇</i>"
+            )
 
             bot.send_document(
-                chat_id=chat_id,
-                document=stamped_pdf,
+                chat_id,
+                final_pdf,
                 visible_file_name=(
                     "Evaluated_Copy_PranaPCS.pdf"
                 ),
-                caption=result_caption
+                caption=caption
             )
-
-        # =====================================================
-        # ERROR HANDLING
-        # =====================================================
 
         except Exception as e:
 
-            print(
-                "Evaluation error:",
-                repr(e)
-            )
-
-            if pdf_doc is not None:
-
-                try:
-                    pdf_doc.close()
-
-                except Exception:
-                    pass
-
-            error_text = str(e)
-
-            if len(error_text) > 250:
-
-                error_text = (
-                    error_text[:250]
-                    + "..."
+            try:
+                os.remove(
+                    item["path"]
                 )
+            except Exception:
+                pass
 
             try:
 
                 bot.edit_message_text(
                     (
                         "⚠️ <b>मूल्यांकन में समस्या</b>\n\n"
-                        f"{error_text}\n\n"
-                        "कृपया स्पष्ट PDF या फोटो पुनः भेजें।"
+                        f"{str(e)[:300]}"
                     ),
-
                     chat_id=chat_id,
-
-                    message_id=(
-                        status_msg.message_id
-                    )
+                    message_id=status.message_id
                 )
 
             except Exception:
 
-                try:
+                bot.send_message(
+                    chat_id,
+                    "⚠️ मूल्यांकन में समस्या:\n"
+                    f"{str(e)[:300]}"
+                )
 
-                    bot.send_message(
-                        chat_id,
-                        (
-                            "⚠️ मूल्यांकन में समस्या हुई।\n"
-                            "कृपया PDF/फोटो पुनः भेजें।"
-                        )
-                    )
 
-                except Exception:
-                    pass
+if __name__ == "__main__":
+
+    import uvicorn
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(
+            os.getenv(
+                "PORT",
+                "10000"
+            )
+        )
+    )
