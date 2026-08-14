@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UPPCS AI Evaluator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body class="bg-slate-900 text-white min-h-screen p-4 font-sans">
+
+  <div class="max-w-md mx-auto space-y-4">
+    <!-- Top Header -->
+    <div class="flex justify-between items-center bg-slate-800 p-4 rounded-xl border border-slate-700">
+      <div>
+        <h1 class="text-lg font-bold text-amber-400">🏛️ PRANA PCS</h1>
+        <p class="text-xs text-slate-400">UPPCS Mains AI Evaluator</p>
+      </div>
+      <span class="bg-amber-500/20 text-amber-300 text-xs px-2.5 py-1 rounded-full border border-amber-500/30">Free Trial</span>
+    </div>
+
+    <!-- Paper Selection -->
+    <div class="bg-slate-800 p-4 rounded-xl space-y-3 border border-slate-700">
+      <label class="text-sm font-semibold text-slate-200">पेपर चुनें:</label>
+      <select id="paper" class="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-sm text-white focus:outline-none">
+        <option value="GS 5">GS Paper 5 (UP Special 1)</option>
+        <option value="GS 6">GS Paper 6 (UP Special 2)</option>
+        <option value="GS 1">GS Paper 1</option>
+        <option value="GS 2">GS Paper 2</option>
+        <option value="GS 3">GS Paper 3</option>
+        <option value="GS 4">GS Paper 4 (Ethics)</option>
+        <option value="General Hindi">सामान्य हिंदी (150 Marks)</option>
+      </select>
+    </div>
+
+    <!-- Image Upload Area -->
+    <div class="bg-slate-800 p-5 rounded-xl border-2 border-dashed border-slate-600 text-center">
+      <input type="file" id="copyImage" accept="image/*" class="hidden" onchange="previewFile()">
+      <label for="copyImage" class="cursor-pointer block">
+        <div class="text-4xl mb-2">📷</div>
+        <p class="text-sm font-medium text-amber-400">उत्तर पुस्तिका की फोटो चुनें</p>
+        <p class="text-xs text-slate-400 mt-1">कैमरा से फोटो लें या गैलरी से अपलोड करें</p>
+      </label>
+      <p id="fileName" class="text-xs text-emerald-400 font-mono mt-2 hidden"></p>
+    </div>
+
+    <!-- Submit Button -->
+    <button onclick="submitEvaluation()" id="evalBtn" class="w-full bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-bold py-3 rounded-xl shadow-lg transition">
+      ⚡ AI मूल्यांकन शुरू करें
+    </button>
+
+    <!-- Result Box -->
+    <div id="resultCard" class="hidden bg-slate-800 p-4 rounded-xl border border-emerald-500/40 space-y-3">
+      <div class="flex justify-between items-center border-b border-slate-700 pb-2">
+        <span class="text-sm font-bold text-slate-200">प्राप्तांक (Marks):</span>
+        <span id="marks" class="text-xl font-extrabold text-emerald-400">5.5 / 8</span>
+      </div>
+      <div>
+        <p class="text-xs font-semibold text-slate-400">परीक्षक की टिप्पणी (Feedback):</p>
+        <p id="feedback" class="text-sm text-slate-200 mt-1 leading-relaxed"></p>
+      </div>
+      <div>
+        <p class="text-xs font-semibold text-amber-400">मुख्य सुधार बिंदु (Actionable Points):</p>
+        <ul id="improvements" class="text-xs text-slate-300 list-disc list-inside mt-1 space-y-1"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // नोट: स्टेप 4 में Render से मिलने वाला URL यहाँ पेस्ट होगा
+    let BACKEND_URL = "RENDER_URL_HERE"; 
+
+    function previewFile() {
+      const file = document.getElementById('copyImage').files[0];
+      if (file) {
+        document.getElementById('fileName').innerText = "चयनित: " + file.name;
+        document.getElementById('fileName').classList.remove('hidden');
+      }
+    }
+
+    async function submitEvaluation() {
+      const file = document.getElementById('copyImage').files[0];
+      if (!file) {
+        alert("कृपया पहले उत्तर पुस्तिका की फोटो चुनें!");
+        return;
+      }
+
+      const btn = document.getElementById('evalBtn');
+      btn.innerText = "⏳ कॉपी जांची जा रही है...";
+      btn.disabled = true;
+
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("paper", document.getElementById('paper').value);
+      formData.append("max_marks", "8");
+
+      try {
+        const res = await fetch(`${BACKEND_URL}/evaluate`, { method: "POST", body: formData });
+        const data = await res.json();
+
+        document.getElementById('marks').innerText = data.obtained_marks + " / 8";
+        document.getElementById('feedback').innerText = data.feedback;
+        
+        const impList = document.getElementById('improvements');
+        impList.innerHTML = "";
+        data.improvements.forEach(item => {
+          const li = document.createElement('li');
+          li.innerText = item;
+          impList.appendChild(li);
+        });
+
+        document.getElementById('resultCard').classList.remove('hidden');
+      } catch (err) {
+        alert("मूल्यांकन में समस्या आई। सुनिश्चित करें कि बैकएंड चालू है।");
+      } finally {
+        btn.innerText = "⚡ AI मूल्यांकन शुरू करें";
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
