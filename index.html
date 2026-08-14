@@ -14,14 +14,14 @@
     <div class="flex justify-between items-center bg-slate-800 p-4 rounded-xl border border-slate-700">
       <div>
         <h1 class="text-lg font-bold text-amber-400">🏛️ PRANA PCS</h1>
-        <p class="text-xs text-slate-400">UPPCS Mains Evaluator</p>
+        <p class="text-xs text-slate-400">UPPCS Mains Evaluator (1-55 Pages)</p>
       </div>
       <span class="bg-amber-500/20 text-amber-300 text-xs px-2.5 py-1 rounded-full border border-amber-500/30">Free Trial</span>
     </div>
 
     <!-- Paper Selection -->
     <div class="bg-slate-800 p-4 rounded-xl space-y-3 border border-slate-700">
-      <label class="text-sm font-semibold text-slate-200">पेपर चुनें:</label>
+      <label class="text-sm font-semibold text-slate-200">विषय / पेपर चुनें:</label>
       <select id="paper" class="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-sm text-white focus:outline-none">
         <option value="GS 5">GS Paper 5 (UP Special 1)</option>
         <option value="GS 6">GS Paper 6 (UP Special 2)</option>
@@ -30,40 +30,39 @@
         <option value="GS 3">GS Paper 3</option>
         <option value="GS 4">GS Paper 4 (Ethics)</option>
         <option value="General Hindi">सामान्य हिंदी (150 Marks)</option>
+        <option value="Essay">निबंध (Essay - 150 Marks)</option>
       </select>
     </div>
 
-    <!-- PDF & Image Upload Box -->
+    <!-- Upload Area: Supports Single/Multiple Images OR Full PDF up to 55 pages -->
     <div class="bg-slate-800 p-6 rounded-xl border-2 border-dashed border-slate-600 text-center">
-      <!-- PDF aur Images dono allowed -->
-      <input type="file" id="copyFile" accept="application/pdf,image/*" class="hidden" onchange="previewFile()">
-      <label for="copyFile" class="cursor-pointer block">
-        <div class="text-4xl mb-2">📄 / 📷</div>
-        <p class="text-sm font-medium text-amber-400">PDF या फोटो अपलोड करें</p>
-        <p class="text-xs text-slate-400 mt-1">UPPCS उत्तर पुस्तिका की PDF या इमेज चुनें</p>
+      <input type="file" id="copyInput" accept="application/pdf,image/*" multiple class="hidden" onchange="handleFiles()">
+      <label for="copyInput" class="cursor-pointer block">
+        <div class="text-4xl mb-2">📄 / 📸</div>
+        <p class="text-sm font-medium text-amber-400">कॉपी अपलोड करें (PDF या Photos)</p>
+        <p class="text-xs text-slate-400 mt-1">1 प्रश्न से लेकर पूरी 55 पेज की कॉपी तक सपोर्टेड</p>
       </label>
-      <p id="fileName" class="text-xs text-emerald-400 font-mono mt-2 hidden"></p>
+      <p id="fileStatus" class="text-xs text-emerald-400 font-semibold mt-2 hidden"></p>
     </div>
 
     <!-- Submit Button -->
-    <button onclick="submitEvaluation()" id="evalBtn" class="w-full bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-bold py-3 rounded-xl shadow-lg transition">
-      ⚡ PDF जांचें व लाल पेन से चेक करें
+    <button onclick="startEvaluation()" id="evalBtn" class="w-full bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-bold py-3 rounded-xl shadow-lg transition">
+      ⚡ AI मूल्यांकन शुरू करें
     </button>
 
-    <!-- Result Box -->
+    <!-- Result Card -->
     <div id="resultCard" class="hidden bg-slate-800 p-4 rounded-xl border border-emerald-500/40 space-y-3">
       <div class="flex justify-between items-center border-b border-slate-700 pb-2">
-        <span class="text-sm font-bold text-slate-200">प्राप्तांक (Marks):</span>
-        <span id="marks" class="text-xl font-extrabold text-emerald-400">-- / 8</span>
+        <span class="text-sm font-bold text-slate-200">कुल प्राप्तांक (Total Marks):</span>
+        <span id="marks" class="text-xl font-extrabold text-emerald-400">-- / --</span>
       </div>
       <div>
-        <p class="text-xs font-semibold text-slate-400">फीडबैक:</p>
-        <p id="feedback" class="text-sm text-slate-200 mt-1"></p>
+        <p class="text-xs font-semibold text-slate-400">परीक्षक की टिप्पणी (Feedback):</p>
+        <p id="feedback" class="text-sm text-slate-200 mt-1 leading-relaxed"></p>
       </div>
 
-      <!-- Download Button for Evaluated PDF -->
-      <a id="downloadPdfBtn" href="#" download="Evaluated_Answer_Copy.pdf" class="block text-center w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg text-sm shadow transition mt-3">
-        📥 जांची हुई PDF डाउनलोड करें (लाल पेन मार्किंग सहित)
+      <a id="downloadBtn" href="#" download="Evaluated_Copy_PranaPCS.pdf" class="block text-center w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg text-sm shadow transition mt-2">
+        📥 जांची हुई PDF डाउनलोड करें (लाल सील सहित)
       </a>
     </div>
   </div>
@@ -71,51 +70,53 @@
   <script>
     let BACKEND_URL = "https://uppcs-ai-evaluator.onrender.com"; 
 
-    function previewFile() {
-      const file = document.getElementById('copyFile').files[0];
-      if (file) {
-        document.getElementById('fileName').innerText = "✅ चयनित: " + file.name;
-        document.getElementById('fileName').classList.remove('hidden');
+    function handleFiles() {
+      const files = document.getElementById('copyInput').files;
+      if (files.length > 0) {
+        const text = files.length === 1 ? `✅ फ़ाइल: ${files[0].name}` : `✅ कुल ${files.length} पेज/फाइलें चुनी गईं`;
+        document.getElementById('fileStatus').innerText = text;
+        document.getElementById('fileStatus').classList.remove('hidden');
       }
     }
 
-    async function submitEvaluation() {
-      const file = document.getElementById('copyFile').files[0];
-      if (!file) {
-        alert("कृपया पहले PDF या इमेज फाइल चुनें!");
+    async function startEvaluation() {
+      const input = document.getElementById('copyInput');
+      if (!input.files || input.files.length === 0) {
+        alert("कृपया पहले अपनी कॉपी (PDF या फोटो) चुनें!");
         return;
       }
 
       const btn = document.getElementById('evalBtn');
-      btn.innerText = "⏳ AI कॉपी जांच रहा है व लाल पेन से लिख रहा है...";
+      btn.innerText = "⏳ कॉपी का गहन मूल्यांकन चल रहा है...";
       btn.disabled = true;
 
       const formData = new FormData();
-      formData.append("file", file);
+      for (let i = 0; i < input.files.length; i++) {
+        formData.append("files", input.files[i]);
+      }
       formData.append("paper", document.getElementById('paper').value);
-      formData.append("max_marks", "8");
 
       try {
         const res = await fetch(`${BACKEND_URL}/evaluate`, { method: "POST", body: formData });
-        if (!res.ok) throw new Error("मूल्यांकन विफल रहा");
+        if (!res.ok) throw new Error("मूल्यांकन में त्रुटि");
 
-        const marks = res.headers.get("X-Marks") || "5.0";
-        const feedback = res.headers.get("X-Feedback") || "मूल्यांकन संपन्न।";
+        const marks = res.headers.get("X-Marks") || "5.5 / 8";
+        const feedback = res.headers.get("X-Feedback") || "मूल्यांकन संपन्न हुआ।";
 
         const blob = await res.blob();
         const pdfUrl = window.URL.createObjectURL(blob);
 
-        document.getElementById('marks').innerText = marks + " / 8";
+        document.getElementById('marks').innerText = marks;
         document.getElementById('feedback').innerText = feedback;
 
-        const downloadBtn = document.getElementById('downloadPdfBtn');
-        downloadBtn.href = pdfUrl;
+        const dl = document.getElementById('downloadBtn');
+        dl.href = pdfUrl;
 
         document.getElementById('resultCard').classList.remove('hidden');
       } catch (err) {
-        alert("मूल्यांकन में समस्या आई। सुनिश्चित करें कि बैकएंड चालू है।");
+        alert("सर्वर से कनेक्ट होने में समस्या आई। कृपया पुनः प्रयास करें।");
       } finally {
-        btn.innerText = "⚡ PDF जांचें व लाल पेन से चेक करें";
+        btn.innerText = "⚡ AI मूल्यांकन शुरू करें";
         btn.disabled = false;
       }
     }
