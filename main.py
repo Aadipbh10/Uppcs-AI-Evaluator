@@ -4532,6 +4532,10 @@ def student_mini_app():
         html_path.read_text(encoding="utf-8")
     )
 
+    return HTMLResponse(
+        html_path.read_text(encoding="utf-8")
+    )
+
 
 @app.post("/api/app/auth")
 async def app_auth(request: Request):
