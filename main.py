@@ -3836,13 +3836,166 @@ def api_stats():
 
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import desc
+import hashlib
+import hmac
+import time
+import base64
 
-ADMIN_PANEL_TOKEN = os.getenv("ADMIN_PANEL_TOKEN", "").strip()
+SUPER_ADMIN_TELEGRAM_ID = os.getenv("SUPER_ADMIN_TELEGRAM_ID", "").strip()
+ADMIN_TELEGRAM_IDS = {
+    x.strip() for x in os.getenv("ADMIN_TELEGRAM_IDS", "").split(",") if x.strip()
+}
+ADMIN_SESSION_COOKIE = "prana_admin_session"
+ADMIN_SESSION_MAX_AGE = 60 * 60 * 24 * 7
+ADMIN_AUTH_SECRET = hashlib.sha256((BOT_TOKEN + "|PRANA_PCS_ADMIN_AUTH").encode()).digest()
+
+
+def ensure_admin_roles_table():
+    if not DB_ENABLED or engine is None:
+        return False
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""
+                CREATE TABLE IF NOT EXISTS admin_users (
+                    telegram_user_id VARCHAR(64) PRIMARY KEY,
+                    role VARCHAR(30) NOT NULL DEFAULT 'admin',
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    last_login_at TIMESTAMPTZ NULL
+                )
+            """)
+        return True
+    except Exception as e:
+        print("ADMIN ROLE TABLE ERROR:", e)
+        return False
+
+
+def telegram_login_valid(data):
+    try:
+        received = str(data.get("hash", ""))
+        auth_date = int(data.get("auth_date", 0))
+        if not received or not auth_date or abs(int(time.time()) - auth_date) > 86400:
+            return False
+        check = "\n".join(
+            f"{k}={data[k]}" for k in sorted(data)
+            if k != "hash" and data.get(k) is not None
+        )
+        secret = hashlib.sha256(BOT_TOKEN.encode()).digest()
+        calculated = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(calculated, received)
+    except Exception:
+        return False
+
+
+def make_admin_session(uid, role):
+    payload = {"uid": str(uid), "role": role, "exp": int(time.time()) + ADMIN_SESSION_MAX_AGE}
+    raw = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    sig = hmac.new(ADMIN_AUTH_SECRET, raw.encode(), hashlib.sha256).hexdigest()
+    return raw + "." + sig
+
+
+def current_admin(request: Request):
+    token = request.cookies.get(ADMIN_SESSION_COOKIE, "")
+    if not token or "." not in token:
+        return None
+    raw, sig = token.rsplit(".", 1)
+    expected = hmac.new(ADMIN_AUTH_SECRET, raw.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode())
+        if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        uid = str(payload.get("uid", ""))
+        if SUPER_ADMIN_TELEGRAM_ID and uid == SUPER_ADMIN_TELEGRAM_ID:
+            return {"id": uid, "role": "super_admin"}
+        if not DB_ENABLED:
+            return None
+        s = SessionLocal()
+        try:
+            row = s.execute(__import__("sqlalchemy").text(
+                "SELECT role,is_active FROM admin_users WHERE telegram_user_id=:uid"
+            ), {"uid": uid}).mappings().first()
+            if row and row["is_active"]:
+                return {"id": uid, "role": str(row["role"])}
+        finally:
+            s.close()
+    except Exception:
+        return None
+    return None
+
 
 def admin_authorized(request: Request) -> bool:
-    return bool(ADMIN_PANEL_TOKEN) and request.headers.get("X-Admin-Token", "").strip() == ADMIN_PANEL_TOKEN
+    return current_admin(request) is not None
+
+
+def super_admin_authorized(request: Request) -> bool:
+    a = current_admin(request)
+    return bool(a and a["role"] == "super_admin")
+
 
 def admin_denied(): return {"ok": False, "error": "Admin authorization required"}
+def admin_forbidden(): return {"ok": False, "error": "Super Admin permission required"}
+
+ensure_admin_roles_table()
+
+
+@app.post("/api/admin/telegram-login")
+async def admin_telegram_login(request: Request):
+    data = await request.json()
+    if not telegram_login_valid(data):
+        return Response(content=b'{"ok":false,"error":"Invalid Telegram authentication"}', status_code=401, media_type="application/json")
+    uid = str(data.get("id", "")).strip()
+    if not uid:
+        return Response(content=b'{"ok":false,"error":"Telegram User ID missing"}', status_code=400, media_type="application/json")
+
+    role = None
+    if SUPER_ADMIN_TELEGRAM_ID and uid == SUPER_ADMIN_TELEGRAM_ID:
+        role = "super_admin"
+    elif uid in ADMIN_TELEGRAM_IDS:
+        role = "admin"
+    elif DB_ENABLED:
+        s = SessionLocal()
+        try:
+            row = s.execute(__import__("sqlalchemy").text(
+                "SELECT role,is_active FROM admin_users WHERE telegram_user_id=:uid"
+            ), {"uid": uid}).mappings().first()
+            if row and row["is_active"]:
+                role = str(row["role"])
+        finally:
+            s.close()
+
+    if not role:
+        return Response(content=b'{"ok":false,"error":"Telegram account is not an authorized admin"}', status_code=403, media_type="application/json")
+
+    if DB_ENABLED:
+        s=SessionLocal()
+        try:
+            now=_utcnow()
+            u=s.get(DBUser,uid)
+            if u:
+                u.username=data.get("username"); u.first_name=data.get("first_name"); u.last_name=data.get("last_name"); u.last_seen_at=now
+            else:
+                s.add(DBUser(telegram_user_id=uid,username=data.get("username"),first_name=data.get("first_name"),last_name=data.get("last_name"),is_allowed=True,is_blocked=False,created_at=now,last_seen_at=now))
+            if role != "super_admin":
+                s.execute(__import__("sqlalchemy").text("UPDATE admin_users SET last_login_at=:now WHERE telegram_user_id=:uid"),{"now":now,"uid":uid})
+            s.commit()
+        finally:s.close()
+
+    response=Response(content=json.dumps({"ok":True,"role":role,"telegram_user_id":uid}),media_type="application/json")
+    response.set_cookie(ADMIN_SESSION_COOKIE,make_admin_session(uid,role),max_age=ADMIN_SESSION_MAX_AGE,httponly=True,secure=True,samesite="lax",path="/")
+    return response
+
+@app.post("/api/admin/logout")
+def admin_logout():
+    response=Response(content=b'{"ok":true}',media_type="application/json")
+    response.delete_cookie(ADMIN_SESSION_COOKIE,path="/")
+    return response
+
+@app.get("/api/admin/me")
+def admin_me(request: Request):
+    a=current_admin(request)
+    return {"ok":True,"authenticated":bool(a),"telegram_user_id":a["id"] if a else None,"role":a["role"] if a else None}
 
 def ensure_admin_content_table():
     if not DB_ENABLED or engine is None: return False
@@ -3853,7 +4006,62 @@ def ensure_admin_content_table():
     except Exception as e: print("ADMIN CONTENT TABLE ERROR:",e); return False
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin_panel(): return HTMLResponse('<!doctype html><html><head><meta charset=\'utf-8\'><meta name=\'viewport\' content=\'width=device-width,initial-scale=1\'><title>PRANA PCS Admin</title><style>\nbody{margin:0;background:#f4f6fb;color:#172033;font-family:system-ui,-apple-system,Segoe UI,sans-serif}.top{background:#111827;color:white;padding:18px 24px;display:flex;justify-content:space-between}.wrap{max-width:1400px;margin:auto;padding:20px}.card{background:white;border:1px solid #e5e7eb;border-radius:14px;padding:16px}.login{max-width:420px;margin:80px auto}.input{width:100%;padding:11px;border:1px solid #ddd;border-radius:9px;margin:7px 0 12px;box-sizing:border-box}.btn{padding:9px 13px;border:0;border-radius:9px;background:#111827;color:#fff;cursor:pointer}.green{background:#059669}.red{background:#dc2626}.hidden{display:none}.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:18px 0}.stat b{font-size:25px;display:block;margin-top:5px}.section{margin-top:20px}.tablewrap{overflow:auto;background:#fff;border:1px solid #e5e7eb;border-radius:14px}.table{width:100%;border-collapse:collapse;min-width:800px}.table th,.table td{padding:10px 12px;border-bottom:1px solid #eee;text-align:left;font-size:13px}.table th{background:#f9fafb}.pill{padding:4px 8px;border-radius:999px;font-size:11px;background:#eef2ff}.ok{background:#dcfce7;color:#166534}.bad{background:#fee2e2;color:#991b1b}.form{display:grid;grid-template-columns:120px 120px 1fr 1fr auto;gap:8px}@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.form{grid-template-columns:1fr}}\n</style></head><body><div id=\'login\' class=\'login card\'><h2>🏛️ PRANA PCS Admin</h2><p>Render में <b>ADMIN_PANEL_TOKEN</b> नाम का environment variable बनाकर उसका token यहाँ डालें।</p><input id=\'token\' class=\'input\' type=\'password\' placeholder=\'Admin token\'><button class=\'btn\' onclick=\'login()\'>Open Panel</button><p id=\'err\'></p></div><div id=\'app\' class=\'hidden\'><div class=\'top\'><b>🏛️ PRANA PCS — Admin Panel</b><button class=\'btn\' onclick=\'logout()\'>Logout</button></div><div class=\'wrap\'><button class=\'btn\' onclick=\'refreshAll()\'>↻ Refresh</button><div id=\'stats\' class=\'grid\'></div><div class=\'section\'><h2>👥 Users</h2><div class=\'tablewrap\'><table class=\'table\'><thead><tr><th>User ID</th><th>Name</th><th>Username</th><th>Status</th><th>Copies</th><th>Action</th></tr></thead><tbody id=\'users\'></tbody></table></div></div><div class=\'section\'><h2>👥 Groups</h2><div class=\'tablewrap\'><table class=\'table\'><thead><tr><th>Group ID</th><th>Title</th><th>Type</th><th>Status</th><th>Action</th></tr></thead><tbody id=\'groups\'></tbody></table></div></div><div class=\'section\'><h2>📄 Evaluated Copies</h2><div class=\'tablewrap\'><table class=\'table\'><thead><tr><th>ID</th><th>User</th><th>Paper</th><th>Marks</th><th>Language</th><th>PDF</th><th>Date</th></tr></thead><tbody id=\'subs\'></tbody></table></div></div><div class=\'section card\'><h2>📝 Daily Question + Model Answer</h2><div class=\'form\'><select id=\'paper\' class=\'input\'><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><select id=\'lang\' class=\'input\'><option>Hindi</option><option>English</option></select><textarea id=\'q\' class=\'input\' placeholder=\'Daily Question\'></textarea><textarea id=\'a\' class=\'input\' placeholder=\'Model Answer\'></textarea><button class=\'btn green\' onclick=\'saveContent()\'>Save</button></div><div class=\'tablewrap\' style=\'margin-top:12px\'><table class=\'table\'><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Date</th></tr></thead><tbody id=\'content\'></tbody></table></div></div></div></div><script>\nconst K=\'prana_admin_token\';let token=localStorage.getItem(K)||\'\';const esc=s=>String(s??\'\').replace(/[&<>]/g,x=>({\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\'}[x]));async function api(p,o={}){o.headers=Object.assign({\'X-Admin-Token\':token,\'Content-Type\':\'application/json\'},o.headers||{});let r=await fetch(p,o),d=await r.json().catch(()=>({}));if(r.status==401)throw Error(\'Unauthorized\');if(!r.ok||d.ok===false)throw Error(d.error||\'Request failed\');return d}async function login(){token=document.getElementById(\'token\').value.trim();try{await api(\'/api/admin/stats\');localStorage.setItem(K,token);show()}catch(e){document.getElementById(\'err\').textContent=\'❌ Invalid token\'}}function show(){document.getElementById(\'login\').classList.add(\'hidden\');document.getElementById(\'app\').classList.remove(\'hidden\');refreshAll()}function logout(){localStorage.removeItem(K);location.reload()}async function refreshAll(){try{let[s,u,g,p,c]=await Promise.all([api(\'/api/admin/stats\'),api(\'/api/admin/users\'),api(\'/api/admin/groups\'),api(\'/api/admin/submissions?limit=100\'),api(\'/api/admin/content\')]);document.getElementById(\'stats\').innerHTML=`<div class=\'card stat\'>Users<b>${s.users}</b></div><div class=\'card stat\'>Groups<b>${s.groups}</b></div><div class=\'card stat\'>Copies<b>${s.submissions}</b></div><div class=\'card stat\'>Average<b>${s.average_percentage}%</b></div><div class=\'card stat\'>Marks<b>${s.total_obtained}/${s.total_max}</b></div>`;document.getElementById(\'users\').innerHTML=u.items.map(x=>`<tr><td>${esc(x.id)}</td><td>${esc(x.name)}</td><td>${esc(x.username||\'\')}</td><td>${x.blocked?\'<span class=\'pill bad\'>Blocked</span>\':x.allowed?\'<span class=\'pill ok\'>Allowed</span>\':\'Pending\'}</td><td>${x.submissions}</td><td><button class=\'btn ${x.blocked?\'green\':\'red\'}\' onclick="userAccess(\'${esc(x.id)}\',${x.blocked?\'false\':\'true\'})">${x.blocked?\'Allow\':\'Block\'}</button></td></tr>`).join(\'\');document.getElementById(\'groups\').innerHTML=g.items.map(x=>`<tr><td>${esc(x.id)}</td><td>${esc(x.title)}</td><td>${esc(x.type)}</td><td>${x.blocked?\'Blocked\':x.allowed?\'Allowed\':\'Not allowed\'}</td><td><button class=\'btn ${x.allowed?\'red\':\'green\'}\' onclick="groupAccess(\'${esc(x.id)}\',${x.allowed?\'false\':\'true\'})">${x.allowed?\'Remove\':\'Allow\'}</button></td></tr>`).join(\'\');document.getElementById(\'subs\').innerHTML=p.items.map(x=>`<tr><td>${esc(x.id.slice(0,8))}</td><td>${esc(x.user_id)}</td><td>${esc(x.paper)}</td><td><b>${x.obtained}/${x.max}</b></td><td>${esc(x.language||\'-\')}</td><td><a href=\'#\' onclick="pdf(\'${x.id}\');return false">Open PDF</a></td><td>${esc(x.created_at||\'\')}</td></tr>`).join(\'\');document.getElementById(\'content\').innerHTML=c.items.map(x=>`<tr><td>${x.id}</td><td>${esc(x.paper)}</td><td>${esc(x.language)}</td><td>${esc(x.question).slice(0,150)}</td><td>${esc(x.created_at||\'\')}</td></tr>`).join(\'\')}catch(e){if(e.message===\'Unauthorized\')logout();else alert(e.message)}}async function userAccess(id,blocked){await api(\'/api/admin/users/\'+encodeURIComponent(id)+\'/access\',{method:\'PATCH\',body:JSON.stringify({blocked})});refreshAll()}async function groupAccess(id,allowed){await api(\'/api/admin/groups/\'+encodeURIComponent(id),{method:\'PATCH\',body:JSON.stringify({allowed})});refreshAll()}async function saveContent(){await api(\'/api/admin/content\',{method:\'POST\',body:JSON.stringify({paper:paper.value,language:lang.value,question:q.value,model_answer:a.value})});q.value=\'\';a.value=\'\';refreshAll()}async function pdf(id){let r=await fetch(\'/api/admin/submissions/\'+encodeURIComponent(id)+\'/pdf\',{headers:{\'X-Admin-Token\':token}});let b=await r.blob(),u=URL.createObjectURL(b);window.open(u,\'_blank\')}if(token)show();\n</script></body></html>')
+def admin_panel():
+    bot_username = os.getenv("BOT_USERNAME", "").strip()
+    if bot and not bot_username:
+        try:
+            bot_username = bot.get_me().username or ""
+        except Exception:
+            pass
+
+    html = """
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PRANA PCS Admin</title>
+<style>
+body{margin:0;background:#f4f6fb;color:#172033;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+.top{background:#111827;color:white;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.wrap{max-width:1450px;margin:auto;padding:20px}.card{background:white;border:1px solid #e5e7eb;border-radius:14px;padding:16px}
+.login{max-width:480px;margin:90px auto;text-align:center}.btn{padding:9px 13px;border:0;border-radius:9px;background:#111827;color:#fff;cursor:pointer}
+.green{background:#059669}.red{background:#dc2626}.blue{background:#2563eb}.gray{background:#6b7280}.hidden{display:none}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:18px 0}.stat b{font-size:25px;display:block;margin-top:5px}
+.section{margin-top:20px}.tablewrap{overflow:auto;background:#fff;border:1px solid #e5e7eb;border-radius:14px}
+.table{width:100%;border-collapse:collapse;min-width:850px}.table th,.table td{padding:10px 12px;border-bottom:1px solid #eee;text-align:left;font-size:13px}.table th{background:#f9fafb}
+.pill{padding:4px 8px;border-radius:999px;font-size:11px;background:#eef2ff}.ok{background:#dcfce7;color:#166534}.bad{background:#fee2e2;color:#991b1b}.role{background:#ede9fe;color:#6d28d9}
+.input{padding:10px;border:1px solid #ddd;border-radius:9px;box-sizing:border-box}.tgbox{display:flex;justify-content:center;margin:25px 0}
+.form{display:grid;grid-template-columns:120px 120px 1fr 1fr auto;gap:8px}@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.form{grid-template-columns:1fr}}
+</style></head><body>
+<div id="login" class="login card"><h1>🏛️ PRANA PCS</h1><h2>Admin Panel</h2>
+<p>अपने Telegram Admin account से login करें।</p>
+<div class="tgbox"><script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="__BOT_USERNAME__" data-size="large" data-userpic="false" data-request-access="write" data-onauth="onTelegramAuth(user)"></script></div>
+<p id="err" style="color:#dc2626"></p><p style="font-size:12px;color:#6b7280">केवल authorized Telegram accounts को access मिलेगा।</p></div>
+<div id="app" class="hidden"><div class="top"><b>🏛️ PRANA PCS — Admin Panel</b><span id="who"></span><button class="btn gray" onclick="logout()">Logout</button></div>
+<div class="wrap"><button class="btn" onclick="refreshAll()">↻ Refresh</button><div id="stats" class="grid"></div>
+<div id="adminManagement" class="section card hidden"><h2>👑 Admin Management</h2><p>केवल Super Admin दूसरे Admin accounts जोड़/हटा सकता है।</p>
+<input id="adminId" class="input" style="max-width:260px" placeholder="Telegram User ID"> <button class="btn blue" onclick="addAdmin()">➕ Add Admin</button>
+<div class="tablewrap" style="margin-top:12px"><table class="table"><thead><tr><th>Telegram ID</th><th>Role</th><th>Status</th><th>Last Login</th><th>Action</th></tr></thead><tbody id="admins"></tbody></table></div></div>
+<div class="section"><h2>👥 Users</h2><div class="tablewrap"><table class="table"><thead><tr><th>User ID</th><th>Name</th><th>Username</th><th>Status</th><th>Copies</th><th>Action</th></tr></thead><tbody id="users"></tbody></table></div></div>
+<div class="section"><h2>👥 Groups</h2><div class="tablewrap"><table class="table"><thead><tr><th>Group ID</th><th>Title</th><th>Type</th><th>Status</th><th>Action</th></tr></thead><tbody id="groups"></tbody></table></div></div>
+<div class="section"><h2>📄 Evaluated Copies</h2><div class="tablewrap"><table class="table"><thead><tr><th>ID</th><th>User</th><th>Paper</th><th>Marks</th><th>Language</th><th>PDF</th><th>Date</th></tr></thead><tbody id="subs"></tbody></table></div></div>
+<div class="section card"><h2>📝 Daily Question + Model Answer</h2><div class="form"><select id="paper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><select id="lang" class="input"><option>Hindi</option><option>English</option></select><textarea id="q" class="input" placeholder="Daily Question"></textarea><textarea id="a" class="input" placeholder="Model Answer"></textarea><button class="btn green" onclick="saveContent()">Save</button></div><div class="tablewrap" style="margin-top:12px"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Date</th></tr></thead><tbody id="content"></tbody></table></div></div>
+</div></div>
+<script>
+function esc(s){return String(s??'').replace(/[&<>]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[x]))}
+async function api(p,o={}){o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});let r=await fetch(p,o),d=await r.json().catch(()=>({}));if(r.status==401||r.status==403)throw Error(d.error||'Unauthorized');if(!r.ok||d.ok===false)throw Error(d.error||'Request failed');return d}
+async function onTelegramAuth(user){try{let d=await api('/api/admin/telegram-login',{method:'POST',body:JSON.stringify(user)});if(d.ok)show()}catch(e){document.getElementById('err').textContent='❌ '+e.message}}
+async function show(){let m=await api('/api/admin/me');if(!m.authenticated){document.getElementById('login').classList.remove('hidden');document.getElementById('app').classList.add('hidden');return}document.getElementById('login').classList.add('hidden');document.getElementById('app').classList.remove('hidden');document.getElementById('who').textContent=(m.role==='super_admin'?'👑 Super Admin':'👤 Admin')+' · '+m.telegram_user_id;document.getElementById('adminManagement').classList.toggle('hidden',m.role!=='super_admin');refreshAll()}
+async function logout(){await fetch('/api/admin/logout',{method:'POST'});location.reload()}
+async function refreshAll(){try{let[s,u,g,p,c]=await Promise.all([api('/api/admin/stats'),api('/api/admin/users'),api('/api/admin/groups'),api('/api/admin/submissions?limit=100'),api('/api/admin/content')]);document.getElementById('stats').innerHTML=`<div class="card stat">Users<b>${s.users}</b></div><div class="card stat">Groups<b>${s.groups}</b></div><div class="card stat">Copies<b>${s.submissions}</b></div><div class="card stat">Average<b>${s.average_percentage}%</b></div><div class="card stat">Marks<b>${s.total_obtained}/${s.total_max}</b></div>`;document.getElementById('users').innerHTML=u.items.map(x=>`<tr><td>${esc(x.id)}</td><td>${esc(x.name)}</td><td>${esc(x.username||'')}</td><td>${x.blocked?'<span class="pill bad">Blocked</span>':x.allowed?'<span class="pill ok">Allowed</span>':'Pending'}</td><td>${x.submissions}</td><td><button class="btn ${x.blocked?'green':'red'}" onclick="userAccess('${esc(x.id)}',${x.blocked?'false':'true'})">${x.blocked?'Allow':'Block'}</button></td></tr>`).join('');document.getElementById('groups').innerHTML=g.items.map(x=>`<tr><td>${esc(x.id)}</td><td>${esc(x.title)}</td><td>${esc(x.type)}</td><td>${x.blocked?'Blocked':x.allowed?'Allowed':'Not allowed'}</td><td><button class="btn ${x.allowed?'red':'green'}" onclick="groupAccess('${esc(x.id)}',${x.allowed?'false':'true'})">${x.allowed?'Remove':'Allow'}</button></td></tr>`).join('');document.getElementById('subs').innerHTML=p.items.map(x=>`<tr><td>${esc(x.id.slice(0,8))}</td><td>${esc(x.user_id)}</td><td>${esc(x.paper)}</td><td><b>${x.obtained}/${x.max}</b></td><td>${esc(x.language||'-')}</td><td><a href="#" onclick="pdf('${x.id}');return false">Open PDF</a></td><td>${esc(x.created_at||'')}</td></tr>`).join('');document.getElementById('content').innerHTML=c.items.map(x=>`<tr><td>${x.id}</td><td>${esc(x.paper)}</td><td>${esc(x.language)}</td><td>${esc(x.question).slice(0,150)}</td><td>${esc(x.created_at||'')}</td></tr>`).join('');let me=await api('/api/admin/me');if(me.role==='super_admin'){let ad=await api('/api/admin/admins');document.getElementById('admins').innerHTML=ad.items.map(x=>`<tr><td>${esc(x.id)}</td><td><span class="pill role">${esc(x.role)}</span></td><td>${x.active?'<span class="pill ok">Active</span>':'<span class="pill bad">Disabled</span>'}</td><td>${esc(x.last_login||'-')}</td><td>${x.role==='super_admin'?'—':`<button class="btn red" onclick="removeAdmin('${esc(x.id)}')">Remove</button>`}</td></tr>`).join('')}}catch(e){if(e.message==='Unauthorized')location.reload();else alert(e.message)}}
+async function addAdmin(){let id=document.getElementById('adminId').value.trim();if(!id)return alert('Telegram User ID डालें');await api('/api/admin/admins',{method:'POST',body:JSON.stringify({telegram_user_id:id})});document.getElementById('adminId').value='';refreshAll()}
+async function removeAdmin(id){if(!confirm('इस Admin का access हटाना है?'))return;await api('/api/admin/admins/'+encodeURIComponent(id),{method:'DELETE'});refreshAll()}
+async function userAccess(id,blocked){await api('/api/admin/users/'+encodeURIComponent(id)+'/access',{method:'PATCH',body:JSON.stringify({blocked})});refreshAll()}
+async function groupAccess(id,allowed){await api('/api/admin/groups/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({allowed})});refreshAll()}
+async function saveContent(){await api('/api/admin/content',{method:'POST',body:JSON.stringify({paper:paper.value,language:lang.value,question:q.value,model_answer:a.value})});q.value='';a.value='';refreshAll()}
+async function pdf(id){let r=await fetch('/api/admin/submissions/'+encodeURIComponent(id)+'/pdf');if(!r.ok)return alert('PDF access denied');let b=await r.blob(),u=URL.createObjectURL(b);window.open(u,'_blank')}
+show();
+</script></body></html>
+"""
+    return HTMLResponse(html.replace("__BOT_USERNAME__", bot_username))
 
 @app.get("/api/admin/stats")
 def admin_stats(request: Request):
@@ -3862,6 +4070,38 @@ def admin_stats(request: Request):
     try:
         rows=s.query(DBSubmission).all(); ob=sum(float(x.total_obtained_marks or 0) for x in rows); mx=sum(float(x.total_max_marks or 0) for x in rows)
         return {"ok":True,"users":s.query(DBUser).count(),"groups":s.query(DBGroup).count(),"submissions":len(rows),"total_obtained":round(ob,1),"total_max":round(mx,1),"average_percentage":round(ob/mx*100,1) if mx else 0}
+    finally:s.close()
+
+@app.get("/api/admin/admins")
+def admin_admins(request: Request):
+    if not super_admin_authorized(request): return admin_forbidden()
+    s=SessionLocal()
+    try:
+        rows=s.execute(__import__("sqlalchemy").text("SELECT telegram_user_id,role,is_active,last_login_at FROM admin_users ORDER BY created_at DESC")).mappings().all()
+        items=[]
+        if SUPER_ADMIN_TELEGRAM_ID: items.append({"id":SUPER_ADMIN_TELEGRAM_ID,"role":"super_admin","active":True,"last_login":None})
+        items += [{"id":str(r["telegram_user_id"]),"role":str(r["role"]),"active":bool(r["is_active"]),"last_login":r["last_login_at"].isoformat() if r["last_login_at"] else None} for r in rows if str(r["telegram_user_id"]) != SUPER_ADMIN_TELEGRAM_ID]
+        return {"ok":True,"items":items}
+    finally:s.close()
+
+@app.post("/api/admin/admins")
+async def admin_add_admin(request: Request):
+    if not super_admin_authorized(request): return admin_forbidden()
+    body=await request.json(); uid=str(body.get("telegram_user_id","")).strip()
+    if not uid:return {"ok":False,"error":"Telegram User ID required"}
+    if uid==SUPER_ADMIN_TELEGRAM_ID:return {"ok":False,"error":"Already Super Admin"}
+    s=SessionLocal()
+    try:
+        now=_utcnow(); s.execute(__import__("sqlalchemy").text("INSERT INTO admin_users(telegram_user_id,role,is_active,created_at) VALUES (:uid,'admin',TRUE,:now) ON CONFLICT (telegram_user_id) DO UPDATE SET role='admin',is_active=TRUE"),{"uid":uid,"now":now}); s.commit(); return {"ok":True}
+    finally:s.close()
+
+@app.delete("/api/admin/admins/{user_id}")
+def admin_remove_admin(user_id: str, request: Request):
+    if not super_admin_authorized(request): return admin_forbidden()
+    if str(user_id)==SUPER_ADMIN_TELEGRAM_ID:return {"ok":False,"error":"Super Admin cannot be removed"}
+    s=SessionLocal()
+    try:
+        s.execute(__import__("sqlalchemy").text("UPDATE admin_users SET is_active=FALSE WHERE telegram_user_id=:uid"),{"uid":str(user_id)}); s.commit(); return {"ok":True}
     finally:s.close()
 
 @app.get("/api/admin/users")
