@@ -4518,11 +4518,19 @@ def app_user_payload(uid):
 
 
 @app.get("/app", response_class=HTMLResponse)
+@app.get("/miniapp", response_class=HTMLResponse)
 def student_mini_app():
-    html_path = STATIC_DIR / "mini_app.html"
+    html_path = STATIC_DIR / "branding" / "mini_app.html"
+
     if not html_path.exists():
-        return HTMLResponse("Mini App build missing.", status_code=500)
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+        return HTMLResponse(
+            "Mini App build missing.",
+            status_code=500
+        )
+
+    return HTMLResponse(
+        html_path.read_text(encoding="utf-8")
+    )
 
 
 @app.post("/api/app/auth")
