@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import time
 import base64
 import threading
 import requests
@@ -20,27 +21,17 @@ def health_check():
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML") if BOT_TOKEN else None
 
-def get_best_available_model():
-    """आपकी API Key पर उपलब्ध एक्टिव Gemini 3.x Flash मॉडल का चुनाव"""
-    try:
-        models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-        r = requests.get(models_url, timeout=10)
-        if r.status_code == 200:
-            available = [m['name'] for m in r.json().get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', [])]
-            # नवीनतम मॉडल्स की प्राथमिकता क्रम
-            for target in ["models/gemini-3.7-flash", "models/gemini-3.6-flash", "models/gemini-3.5-flash", "models/gemini-2.5-flash"]:
-                if target in available:
-                    return target
-            if available:
-                return available[0]
-    except Exception:
-        pass
-    return "models/gemini-3.6-flash"
+# हाई-डिमांड से बचने के लिए मॉडल्स की फॉलबैक लिस्ट
+CANDIDATE_MODELS = [
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro"
+]
 
-def evaluate_with_gemini(images_b64, total_pages):
-    active_model = get_best_available_model()
-    model_name = active_model.replace("models/", "")
-    
+def evaluate_with_gemini_fallback(images_b64, total_pages):
+    """503 High Demand से बचने के लिए मल्टी-मॉडल ऑटोमैटिक फॉलबैक"""
     parts = []
     for b64 in images_b64:
         parts.append({
@@ -51,10 +42,10 @@ def evaluate_with_gemini(images_b64, total_pages):
         })
     
     prompt = f"""
-    आप UPPCS मुख्य परीक्षा के वरिष्ठ एवं मुख्य परीक्षक हैं।
+    आप UPPCS मुख्य परीक्षा (Civil Services Mains) के वरिष्ठ एवं मुख्य परीक्षक हैं।
     उत्तर पुस्तिका के कुल पृष्ठ: {total_pages}
 
-    इस उत्तर पुस्तिका का अत्यंत निष्पक्ष और गहन मूल्यांकन करें:
+    इस उत्तर पुस्तिका का अत्यंत निष्पक्ष, गंभीर और विस्तृत मूल्यांकन करें:
     1. उत्तरों को पढ़कर पूर्णांक (Max Marks) और प्राप्तांक (Obtained Marks) तय करें।
     2. UP विशेष तथ्य, बजट, योजनाएं, आंकड़े, संरचना (भूमिका, मुख्य भाग, निष्कर्ष) और प्रस्तुति के आधार पर अंक दें।
     
@@ -72,21 +63,33 @@ def evaluate_with_gemini(images_b64, total_pages):
     """
     parts.append({"text": prompt})
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [{"parts": parts}],
         "generationConfig": {"response_mime_type": "application/json"}
     }
-    
-    res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=120)
-    
-    if res.status_code == 200:
-        resp_json = res.json()
-        raw_text = resp_json['candidates'][0]['content']['parts'][0]['text']
-        clean_text = raw_text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_text)
-    else:
-        raise Exception(f"Gemini API Error ({res.status_code}): {res.text[:120]}")
+
+    last_error = ""
+    # एक के बाद एक मॉडल्स पर स्वतः प्रयास करना
+    for model_name in CANDIDATE_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        try:
+            res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=60)
+            if res.status_code == 200:
+                resp_json = res.json()
+                raw_text = resp_json['candidates'][0]['content']['parts'][0]['text']
+                clean_text = raw_text.replace("```json", "").replace("```", "").strip()
+                return json.loads(clean_text)
+            elif res.status_code in [503, 429]:
+                # अगर मॉडल व्यस्त है, तो 1 सेकंड रुककर अगले मॉडल पर जाएँ
+                time.sleep(1)
+                continue
+            else:
+                last_error = f"{model_name}: {res.text[:100]}"
+        except Exception as e:
+            last_error = str(e)
+            continue
+            
+    raise Exception(f"सभी AI मॉडल्स व्यस्त थे। विवरण: {last_error}")
 
 def create_stamped_pdf(pdf_doc, obtained, max_m):
     first_page = pdf_doc[0]
@@ -158,7 +161,7 @@ if bot:
 
             total_pages = len(pdf_doc)
 
-            eval_result = evaluate_with_gemini(images_b64, total_pages)
+            eval_result = evaluate_with_gemini_fallback(images_b64, total_pages)
             
             obtained = eval_result.get("obtained_marks", 5.5)
             max_m = eval_result.get("max_marks", 8)
