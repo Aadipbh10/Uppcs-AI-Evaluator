@@ -278,6 +278,15 @@ Evaluation ऐसा दिखना चाहिए जैसे किसी �
 ✓ Comments बड़े लाल text में सीधे खाली जगह/margin में हों; कोई box, card, sticker या background न हो।
 ✓ प्रत्येक FULL page पर सामान्यतः 3-4 अलग substantive comments दें।
 ✓ HALF-page answer पर 2-3 comments पर्याप्त हैं।
+✓ यदि page पर 4 comments दिए जा रहे हैं, तो सामान्यतः कम-से-कम 2 comments CONSTRUCTIVE होने चाहिए:
+  - क्या महत्वपूर्ण point छूट गया,
+  - क्या तथ्य/उदाहरण/डेटा जोड़ा जा सकता था,
+  - कहाँ विश्लेषण कमजोर है,
+  - क्या presentation/structure बेहतर हो सकती थी,
+  - या प्रश्न की demand का कौन-सा हिस्सा अधूरा है।
+✓ बाकी comments अच्छे points, effective presentation, correct facts, useful value addition आदि पर appreciation/tick हो सकते हैं।
+✓ केवल appreciation के 4 comments कभी न बनाएं जब वास्तविक सुधार की गुंजाइश मौजूद हो।
+✓ यदि page पर कोई वास्तविक कमी नहीं है, तो काल्पनिक गलती न गढ़ें; तब appreciation comments अधिक हो सकते हैं।
 ✓ इनमें कम से कम एक comment वहाँ दें जहाँ प्रश्न की कोई demand/sub-demand छूटी, कमजोर या अधूरी हो — यदि ऐसी कमी वास्तव में मौजूद है।
 ✓ Missing point होने पर comment में साफ लिखें कि "यहाँ क्या होना चाहिए था"।
 ✓ केवल महत्वपूर्ण और वास्तविक mistakes/high-value points चुनें।
@@ -317,6 +326,31 @@ QUESTION DEMAND — MANDATORY CHECK
 
 Question की demand को पूरा किए बिना केवल अच्छे facts लिखने पर high marks न दें।
 
+============================================================
+CONSTRUCTIVE EXAMINER COMMENTS — MANDATORY BALANCE
+============================================================
+
+हर page के comments का उद्देश्य केवल प्रशंसा करना नहीं है।
+Examiner को विद्यार्थी को यह भी बताना है कि उत्तर को अगले स्तर तक
+कैसे ले जाया जा सकता था।
+
+यदि 4 comments दिए जा रहे हैं और page में सुधार की वास्तविक गुंजाइश है,
+तो कम-से-कम 2 comments में इनमें से कोई एक स्पष्ट रूप से बताएं:
+
+1. "यहाँ ______ तथ्य/उदाहरण/डेटा जोड़ा जा सकता था।"
+2. "यहाँ ______ आयाम छूट गया है।"
+3. "इस तर्क को ______ से substantiate करना चाहिए था।"
+4. "प्रश्न की मांग के अनुसार यहाँ ______ भाग अपेक्षित था।"
+5. "प्रस्तुतीकरण को बेहतर बनाने के लिए ______ किया जा सकता था।"
+6. "यह बिंदु सही है, लेकिन ______ जोड़ने से analysis अधिक मजबूत होता।"
+
+Comment विद्यार्थी को actionable सुधार बताए; केवल "अच्छा", "बेहतरीन",
+"सही" जैसे appreciation शब्द substantive comment के रूप में पर्याप्त नहीं हैं।
+
+गलती न हो तो गलती invent न करें। सुधार का सुझाव केवल उत्तर की वास्तविक
+content/presentation और प्रश्न की demand देखकर दें।
+
+============================================================
 ============================================================
 REQUIRED / MISSING POINTS
 ============================================================
@@ -1465,35 +1499,45 @@ def place_comment(
         page_height * 0.24
     )
 
-    chosen_rect = find_blank_comment_rect(
-        page,
-        desired_w,
-        desired_h,
-        anchor_box,
-        occupied,
-        placement_box
-    )
+    try:
+        chosen_rect = find_blank_comment_rect(
+            page,
+            desired_w,
+            desired_h,
+            anchor_box,
+            occupied,
+            placement_box
+        )
+    except Exception as e:
+        print("BLANK DETECTION ERROR:", e)
+        chosen_rect = None
 
     # If the page has no sufficiently blank area of the preferred
     # size, progressively reduce the box — but never intentionally
     # place it over text.
     if chosen_rect is None:
         for scale in (0.88, 0.76, 0.64):
-            rect = find_blank_comment_rect(
-                page,
-                desired_w * scale,
-                desired_h * scale,
-                anchor_box,
-                occupied,
-                placement_box
-            )
+            try:
+                rect = find_blank_comment_rect(
+                    page,
+                    desired_w * scale,
+                    desired_h * scale,
+                    anchor_box,
+                    occupied,
+                    placement_box
+                )
+            except Exception as e:
+                print("BLANK FALLBACK ERROR:", e)
+                rect = None
             if rect is not None:
                 chosen_rect = rect
                 break
 
-    # If absolutely no blank region is found, skip this comment
-    # rather than writing over the student's answer.
+    # If no safe blank region is found, skip ONLY this annotation.
+    # IMPORTANT: never raise an exception here. The evaluated PDF must
+    # continue to generate and be sent even if comment placement fails.
     if chosen_rect is None:
+        print("SAFE ANNOTATION SKIPPED: no blank area found")
         return
 
     page.insert_image(
@@ -1722,15 +1766,20 @@ def annotate_pdf(
                 [50, 700, 300, 995]
             )
 
-            place_comment(
-                page,
-                text,
-                anchor,
-                placement_box,
-                page_width,
-                page_height,
-                occupied
-            )
+            try:
+                place_comment(
+                    page,
+                    text,
+                    anchor,
+                    placement_box,
+                    page_width,
+                    page_height,
+                    occupied
+                )
+            except Exception as e:
+                print("COMMENT PLACEMENT ERROR:", e)
+                # Never abort the evaluated-copy PDF because of one comment.
+                continue
 
         # ----------------------------------------------------
         # QUESTION END MARKS
