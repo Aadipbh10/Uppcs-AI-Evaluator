@@ -3,6 +3,8 @@ import io
 import json
 import base64
 import tempfile
+import sqlite3
+from datetime import datetime, timezone
 import requests
 from pathlib import Path
 
@@ -21,13 +23,272 @@ RENDER_EXTERNAL_URL = os.getenv(
 app = FastAPI()
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML") if BOT_TOKEN else None
 
+# ============================================================
+# ACCESS / SUBMISSION DATABASE
+# ============================================================
+# Phase 1: manual access control.
+# You can manually activate a user/group from the Admin API/panel later.
+# Payment fields are already present in the schema so a gateway can be
+# connected without redesigning the database.
+DB_PATH = os.getenv("DB_PATH", "/tmp/prana_evaluator.db")
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
+
+
+def db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_user_id INTEGER UNIQUE NOT NULL,
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            access_type TEXT NOT NULL DEFAULT 'none',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_group_id INTEGER UNIQUE NOT NULL,
+            title TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_groups (
+            user_id INTEGER NOT NULL,
+            group_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, group_id)
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_user_id INTEGER NOT NULL,
+            plan TEXT NOT NULL DEFAULT 'manual',
+            payment_status TEXT NOT NULL DEFAULT 'manual',
+            payment_id TEXT,
+            amount REAL DEFAULT 0,
+            started_at TEXT,
+            expires_at TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            submission_uuid TEXT UNIQUE NOT NULL,
+            telegram_user_id INTEGER NOT NULL,
+            paper TEXT,
+            language TEXT,
+            original_filename TEXT,
+            evaluated_filename TEXT,
+            obtained_marks REAL,
+            max_marks REAL,
+            status TEXT NOT NULL DEFAULT 'received',
+            overall_feedback TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS submission_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            submission_id INTEGER NOT NULL,
+            question_number INTEGER,
+            start_page INTEGER,
+            end_page INTEGER,
+            pages_used INTEGER,
+            max_marks REAL,
+            obtained_marks REAL,
+            demand_parts TEXT,
+            fulfilled_parts TEXT,
+            skipped_parts TEXT,
+            end_page_comment TEXT
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS daily_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paper TEXT NOT NULL,
+            language TEXT NOT NULL,
+            question TEXT NOT NULL,
+            model_answer TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def upsert_user(tg_user):
+    conn = db()
+    ts = now_iso()
+    conn.execute("""
+        INSERT INTO users
+        (telegram_user_id, username, first_name, last_name, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(telegram_user_id) DO UPDATE SET
+            username=excluded.username,
+            first_name=excluded.first_name,
+            last_name=excluded.last_name,
+            updated_at=excluded.updated_at
+    """, (
+        tg_user.id,
+        tg_user.username,
+        tg_user.first_name,
+        tg_user.last_name,
+        ts,
+        ts
+    ))
+    conn.commit()
+    conn.close()
+
+
+def user_has_access(telegram_user_id):
+    conn = db()
+    row = conn.execute("""
+        SELECT status, access_type
+        FROM users
+        WHERE telegram_user_id = ?
+    """, (telegram_user_id,)).fetchone()
+
+    if row and row["status"] == "active":
+        conn.close()
+        return True
+
+    # Group access is checked separately later when group membership is
+    # explicitly synchronized/approved by the admin.
+    conn.close()
+    return False
+
+
+def create_submission_record(
+    telegram_user_id,
+    paper,
+    language,
+    original_filename,
+    evaluated_filename=None
+):
+    import uuid
+
+    sid = str(uuid.uuid4())
+    conn = db()
+    cur = conn.execute("""
+        INSERT INTO submissions
+        (submission_uuid, telegram_user_id, paper, language,
+         original_filename, evaluated_filename, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        sid,
+        telegram_user_id,
+        paper,
+        language,
+        original_filename,
+        evaluated_filename,
+        now_iso()
+    ))
+    submission_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return submission_id, sid
+
+
+def complete_submission(
+    submission_id,
+    result,
+    evaluated_filename
+):
+    conn = db()
+    conn.execute("""
+        UPDATE submissions
+        SET evaluated_filename = ?,
+            obtained_marks = ?,
+            max_marks = ?,
+            status = 'completed',
+            overall_feedback = ?,
+            completed_at = ?
+        WHERE id = ?
+    """, (
+        evaluated_filename,
+        result.get("total_obtained_marks", 0),
+        result.get("total_max_marks", 0),
+        result.get("overall_feedback", ""),
+        now_iso(),
+        submission_id
+    ))
+
+    for q in result.get("questions", []):
+        conn.execute("""
+            INSERT INTO submission_questions
+            (submission_id, question_number, start_page, end_page,
+             pages_used, max_marks, obtained_marks,
+             demand_parts, fulfilled_parts, skipped_parts,
+             end_page_comment)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            submission_id,
+            q.get("question_number"),
+            q.get("start_page"),
+            q.get("end_page"),
+            q.get("pages_used"),
+            q.get("max_marks"),
+            q.get("obtained_marks"),
+            json.dumps(q.get("demand_parts", []), ensure_ascii=False),
+            json.dumps(q.get("fulfilled_parts", []), ensure_ascii=False),
+            json.dumps(q.get("skipped_parts", []), ensure_ascii=False),
+            q.get("end_page_comment", "")
+        ))
+
+    conn.commit()
+    conn.close()
+
+
+def init_database():
+    try:
+        init_db()
+        print("DATABASE READY:", DB_PATH)
+    except Exception as e:
+        print("DATABASE INIT ERROR:", e)
+
+
+init_database()
+
+
 FONT_PATH = "/tmp/Kalam-Regular.ttf"
 FONT_URL = (
     "https://raw.githubusercontent.com/google/fonts/main/"
     "ofl/kalam/Kalam-Regular.ttf"
 )
 
-PENDING = {}
+PENDING = {}  # chat_id -> temporary uploaded copy metadata
 
 # Current production-ready Gemini models.
 # Preferred models are only a ranking. At runtime we ask Gemini which
@@ -137,8 +398,175 @@ def ask_paper(message):
     )
 
 
+
+def require_admin(request: Request):
+    if not ADMIN_TOKEN:
+        raise Exception("ADMIN_TOKEN is not configured.")
+
+    supplied = request.headers.get("X-Admin-Token", "")
+    if supplied != ADMIN_TOKEN:
+        raise PermissionError("Invalid admin token.")
+
+
+@app.get("/api/access/users")
+async def api_users(request: Request):
+    require_admin(request)
+    conn = db()
+    rows = conn.execute("""
+        SELECT * FROM users
+        ORDER BY updated_at DESC
+    """).fetchall()
+    conn.close()
+    return {"users": [dict(r) for r in rows]}
+
+
+@app.post("/api/access/user/{telegram_user_id}/grant")
+async def api_grant_user(telegram_user_id: int, request: Request):
+    require_admin(request)
+    body = await request.json()
+    access_type = str(body.get("access_type", "manual"))
+    conn = db()
+    ts = now_iso()
+    conn.execute("""
+        INSERT INTO users
+        (telegram_user_id, status, access_type, created_at, updated_at)
+        VALUES (?, 'active', ?, ?, ?)
+        ON CONFLICT(telegram_user_id) DO UPDATE SET
+            status='active',
+            access_type=excluded.access_type,
+            updated_at=excluded.updated_at
+    """, (telegram_user_id, access_type, ts, ts))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "telegram_user_id": telegram_user_id, "status": "active"}
+
+
+@app.post("/api/access/user/{telegram_user_id}/revoke")
+async def api_revoke_user(telegram_user_id: int, request: Request):
+    require_admin(request)
+    conn = db()
+    conn.execute("""
+        UPDATE users
+        SET status='blocked', updated_at=?
+        WHERE telegram_user_id=?
+    """, (now_iso(), telegram_user_id))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "telegram_user_id": telegram_user_id, "status": "blocked"}
+
+
+@app.post("/api/access/group/{telegram_group_id}/grant")
+async def api_grant_group(telegram_group_id: int, request: Request):
+    require_admin(request)
+    body = await request.json()
+    title = str(body.get("title", ""))
+    conn = db()
+    ts = now_iso()
+    conn.execute("""
+        INSERT INTO groups
+        (telegram_group_id, title, status, created_at, updated_at)
+        VALUES (?, ?, 'active', ?, ?)
+        ON CONFLICT(telegram_group_id) DO UPDATE SET
+            title=excluded.title,
+            status='active',
+            updated_at=excluded.updated_at
+    """, (telegram_group_id, title, ts, ts))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "telegram_group_id": telegram_group_id, "status": "active"}
+
+
+@app.post("/api/access/group/{telegram_group_id}/revoke")
+async def api_revoke_group(telegram_group_id: int, request: Request):
+    require_admin(request)
+    conn = db()
+    conn.execute("""
+        UPDATE groups
+        SET status='blocked', updated_at=?
+        WHERE telegram_group_id=?
+    """, (now_iso(), telegram_group_id))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "telegram_group_id": telegram_group_id, "status": "blocked"}
+
+
+@app.get("/api/stats/overview")
+async def api_stats(request: Request):
+    require_admin(request)
+    conn = db()
+
+    users = conn.execute(
+        "SELECT COUNT(*) AS n FROM users WHERE status='active'"
+    ).fetchone()["n"]
+
+    submissions = conn.execute(
+        "SELECT COUNT(*) AS n FROM submissions"
+    ).fetchone()["n"]
+
+    completed = conn.execute(
+        "SELECT COUNT(*) AS n FROM submissions WHERE status='completed'"
+    ).fetchone()["n"]
+
+    avg = conn.execute("""
+        SELECT AVG(obtained_marks * 100.0 / NULLIF(max_marks, 0)) AS pct
+        FROM submissions
+        WHERE status='completed'
+    """).fetchone()["pct"]
+
+    by_paper = conn.execute("""
+        SELECT paper,
+               COUNT(*) AS submissions,
+               ROUND(AVG(obtained_marks * 100.0 /
+                         NULLIF(max_marks, 0)), 2) AS avg_percentage
+        FROM submissions
+        WHERE status='completed'
+        GROUP BY paper
+        ORDER BY paper
+    """).fetchall()
+
+    conn.close()
+
+    return {
+        "active_users": users,
+        "total_submissions": submissions,
+        "completed_submissions": completed,
+        "average_percentage": round(avg, 2) if avg is not None else 0,
+        "by_paper": [dict(x) for x in by_paper]
+    }
+
+
+@app.post("/api/content/daily-question")
+async def api_daily_question(request: Request):
+    require_admin(request)
+    body = await request.json()
+
+    paper = str(body.get("paper", "")).strip().upper()
+    language = str(body.get("language", "hi")).strip().lower()
+    question = str(body.get("question", "")).strip()
+    model_answer = str(body.get("model_answer", "")).strip()
+
+    if paper not in {"GS1", "GS2", "GS3", "GS4", "GS5", "GS6"}:
+        raise ValueError("Invalid paper.")
+    if language not in {"hi", "en"}:
+        raise ValueError("Language must be hi or en.")
+    if not question:
+        raise ValueError("Question is required.")
+
+    conn = db()
+    cur = conn.execute("""
+        INSERT INTO daily_questions
+        (paper, language, question, model_answer, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (paper, language, question, model_answer, now_iso()))
+    conn.commit()
+    item_id = cur.lastrowid
+    conn.close()
+
+    return {"ok": True, "id": item_id}
+
 @app.on_event("startup")
 def startup():
+    init_database()
     ensure_font()
     if bot:
         try:
