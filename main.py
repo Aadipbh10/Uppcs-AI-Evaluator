@@ -16,7 +16,7 @@ import pymupdf as fitz
 # PostgreSQL persistence layer (keeps the existing evaluator/rendering code intact)
 from sqlalchemy import (
     create_engine, Column, String, Integer, Float, DateTime, Text, Boolean,
-    ForeignKey, JSON, Index
+    ForeignKey, JSON, Index, LargeBinary
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -133,6 +133,13 @@ class DBSubmission(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class DBSubmissionPDF(Base):
+    __tablename__ = "submission_files"
+    submission_id = Column(String(64), ForeignKey("submissions.id", ondelete="CASCADE"), primary_key=True)
+    pdf_bytes = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+
+
 class DBQuestion(Base):
     __tablename__ = "submission_questions"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -236,7 +243,7 @@ def save_user_and_chat(message):
         session.close()
 
 
-def save_evaluation_to_database(message, item, paper, result, evaluated_filename):
+def save_evaluation_to_database(message, item, paper, result, evaluated_filename, evaluated_pdf_bytes=None):
     # PDF delivery is never blocked by a database error.
     if not DB_ENABLED or SessionLocal is None:
         return None
@@ -269,6 +276,9 @@ def save_evaluation_to_database(message, item, paper, result, evaluated_filename
             completed_at=now,
         )
         session.add(submission)
+
+        if evaluated_pdf_bytes:
+            session.add(DBSubmissionPDF(submission_id=submission_id, pdf_bytes=evaluated_pdf_bytes, created_at=now))
 
         for q in result.get("questions", []):
             session.add(DBQuestion(
@@ -3738,7 +3748,8 @@ if bot:
                 item,
                 paper,
                 result,
-                evaluated_filename
+                evaluated_filename,
+                final_pdf.getvalue()
             )
 
             bot.send_document(
@@ -3817,6 +3828,132 @@ def api_stats():
         return {"ok": False, "error": str(e)[:300]}
     finally:
         session.close()
+
+
+# ============================================================
+# ADMIN PANEL — FOUNDATION
+# ============================================================
+
+from fastapi.responses import HTMLResponse, Response
+from sqlalchemy import desc
+
+ADMIN_PANEL_TOKEN = os.getenv("ADMIN_PANEL_TOKEN", "").strip()
+
+def admin_authorized(request: Request) -> bool:
+    return bool(ADMIN_PANEL_TOKEN) and request.headers.get("X-Admin-Token", "").strip() == ADMIN_PANEL_TOKEN
+
+def admin_denied(): return {"ok": False, "error": "Admin authorization required"}
+
+def ensure_admin_content_table():
+    if not DB_ENABLED or engine is None: return False
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql("""CREATE TABLE IF NOT EXISTS daily_content (id SERIAL PRIMARY KEY,paper VARCHAR(10) NOT NULL,language VARCHAR(20) NOT NULL DEFAULT 'Hindi',question TEXT NOT NULL,model_answer TEXT NOT NULL DEFAULT '',is_active BOOLEAN NOT NULL DEFAULT TRUE,created_at TIMESTAMPTZ NOT NULL,updated_at TIMESTAMPTZ NOT NULL)""")
+        return True
+    except Exception as e: print("ADMIN CONTENT TABLE ERROR:",e); return False
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_panel(): return HTMLResponse('<!doctype html><html><head><meta charset=\'utf-8\'><meta name=\'viewport\' content=\'width=device-width,initial-scale=1\'><title>PRANA PCS Admin</title><style>\nbody{margin:0;background:#f4f6fb;color:#172033;font-family:system-ui,-apple-system,Segoe UI,sans-serif}.top{background:#111827;color:white;padding:18px 24px;display:flex;justify-content:space-between}.wrap{max-width:1400px;margin:auto;padding:20px}.card{background:white;border:1px solid #e5e7eb;border-radius:14px;padding:16px}.login{max-width:420px;margin:80px auto}.input{width:100%;padding:11px;border:1px solid #ddd;border-radius:9px;margin:7px 0 12px;box-sizing:border-box}.btn{padding:9px 13px;border:0;border-radius:9px;background:#111827;color:#fff;cursor:pointer}.green{background:#059669}.red{background:#dc2626}.hidden{display:none}.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:18px 0}.stat b{font-size:25px;display:block;margin-top:5px}.section{margin-top:20px}.tablewrap{overflow:auto;background:#fff;border:1px solid #e5e7eb;border-radius:14px}.table{width:100%;border-collapse:collapse;min-width:800px}.table th,.table td{padding:10px 12px;border-bottom:1px solid #eee;text-align:left;font-size:13px}.table th{background:#f9fafb}.pill{padding:4px 8px;border-radius:999px;font-size:11px;background:#eef2ff}.ok{background:#dcfce7;color:#166534}.bad{background:#fee2e2;color:#991b1b}.form{display:grid;grid-template-columns:120px 120px 1fr 1fr auto;gap:8px}@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.form{grid-template-columns:1fr}}\n</style></head><body><div id=\'login\' class=\'login card\'><h2>🏛️ PRANA PCS Admin</h2><p>Render में <b>ADMIN_PANEL_TOKEN</b> नाम का environment variable बनाकर उसका token यहाँ डालें।</p><input id=\'token\' class=\'input\' type=\'password\' placeholder=\'Admin token\'><button class=\'btn\' onclick=\'login()\'>Open Panel</button><p id=\'err\'></p></div><div id=\'app\' class=\'hidden\'><div class=\'top\'><b>🏛️ PRANA PCS — Admin Panel</b><button class=\'btn\' onclick=\'logout()\'>Logout</button></div><div class=\'wrap\'><button class=\'btn\' onclick=\'refreshAll()\'>↻ Refresh</button><div id=\'stats\' class=\'grid\'></div><div class=\'section\'><h2>👥 Users</h2><div class=\'tablewrap\'><table class=\'table\'><thead><tr><th>User ID</th><th>Name</th><th>Username</th><th>Status</th><th>Copies</th><th>Action</th></tr></thead><tbody id=\'users\'></tbody></table></div></div><div class=\'section\'><h2>👥 Groups</h2><div class=\'tablewrap\'><table class=\'table\'><thead><tr><th>Group ID</th><th>Title</th><th>Type</th><th>Status</th><th>Action</th></tr></thead><tbody id=\'groups\'></tbody></table></div></div><div class=\'section\'><h2>📄 Evaluated Copies</h2><div class=\'tablewrap\'><table class=\'table\'><thead><tr><th>ID</th><th>User</th><th>Paper</th><th>Marks</th><th>Language</th><th>PDF</th><th>Date</th></tr></thead><tbody id=\'subs\'></tbody></table></div></div><div class=\'section card\'><h2>📝 Daily Question + Model Answer</h2><div class=\'form\'><select id=\'paper\' class=\'input\'><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><select id=\'lang\' class=\'input\'><option>Hindi</option><option>English</option></select><textarea id=\'q\' class=\'input\' placeholder=\'Daily Question\'></textarea><textarea id=\'a\' class=\'input\' placeholder=\'Model Answer\'></textarea><button class=\'btn green\' onclick=\'saveContent()\'>Save</button></div><div class=\'tablewrap\' style=\'margin-top:12px\'><table class=\'table\'><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Date</th></tr></thead><tbody id=\'content\'></tbody></table></div></div></div></div><script>\nconst K=\'prana_admin_token\';let token=localStorage.getItem(K)||\'\';const esc=s=>String(s??\'\').replace(/[&<>]/g,x=>({\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\'}[x]));async function api(p,o={}){o.headers=Object.assign({\'X-Admin-Token\':token,\'Content-Type\':\'application/json\'},o.headers||{});let r=await fetch(p,o),d=await r.json().catch(()=>({}));if(r.status==401)throw Error(\'Unauthorized\');if(!r.ok||d.ok===false)throw Error(d.error||\'Request failed\');return d}async function login(){token=document.getElementById(\'token\').value.trim();try{await api(\'/api/admin/stats\');localStorage.setItem(K,token);show()}catch(e){document.getElementById(\'err\').textContent=\'❌ Invalid token\'}}function show(){document.getElementById(\'login\').classList.add(\'hidden\');document.getElementById(\'app\').classList.remove(\'hidden\');refreshAll()}function logout(){localStorage.removeItem(K);location.reload()}async function refreshAll(){try{let[s,u,g,p,c]=await Promise.all([api(\'/api/admin/stats\'),api(\'/api/admin/users\'),api(\'/api/admin/groups\'),api(\'/api/admin/submissions?limit=100\'),api(\'/api/admin/content\')]);document.getElementById(\'stats\').innerHTML=`<div class=\'card stat\'>Users<b>${s.users}</b></div><div class=\'card stat\'>Groups<b>${s.groups}</b></div><div class=\'card stat\'>Copies<b>${s.submissions}</b></div><div class=\'card stat\'>Average<b>${s.average_percentage}%</b></div><div class=\'card stat\'>Marks<b>${s.total_obtained}/${s.total_max}</b></div>`;document.getElementById(\'users\').innerHTML=u.items.map(x=>`<tr><td>${esc(x.id)}</td><td>${esc(x.name)}</td><td>${esc(x.username||\'\')}</td><td>${x.blocked?\'<span class=\'pill bad\'>Blocked</span>\':x.allowed?\'<span class=\'pill ok\'>Allowed</span>\':\'Pending\'}</td><td>${x.submissions}</td><td><button class=\'btn ${x.blocked?\'green\':\'red\'}\' onclick="userAccess(\'${esc(x.id)}\',${x.blocked?\'false\':\'true\'})">${x.blocked?\'Allow\':\'Block\'}</button></td></tr>`).join(\'\');document.getElementById(\'groups\').innerHTML=g.items.map(x=>`<tr><td>${esc(x.id)}</td><td>${esc(x.title)}</td><td>${esc(x.type)}</td><td>${x.blocked?\'Blocked\':x.allowed?\'Allowed\':\'Not allowed\'}</td><td><button class=\'btn ${x.allowed?\'red\':\'green\'}\' onclick="groupAccess(\'${esc(x.id)}\',${x.allowed?\'false\':\'true\'})">${x.allowed?\'Remove\':\'Allow\'}</button></td></tr>`).join(\'\');document.getElementById(\'subs\').innerHTML=p.items.map(x=>`<tr><td>${esc(x.id.slice(0,8))}</td><td>${esc(x.user_id)}</td><td>${esc(x.paper)}</td><td><b>${x.obtained}/${x.max}</b></td><td>${esc(x.language||\'-\')}</td><td><a href=\'#\' onclick="pdf(\'${x.id}\');return false">Open PDF</a></td><td>${esc(x.created_at||\'\')}</td></tr>`).join(\'\');document.getElementById(\'content\').innerHTML=c.items.map(x=>`<tr><td>${x.id}</td><td>${esc(x.paper)}</td><td>${esc(x.language)}</td><td>${esc(x.question).slice(0,150)}</td><td>${esc(x.created_at||\'\')}</td></tr>`).join(\'\')}catch(e){if(e.message===\'Unauthorized\')logout();else alert(e.message)}}async function userAccess(id,blocked){await api(\'/api/admin/users/\'+encodeURIComponent(id)+\'/access\',{method:\'PATCH\',body:JSON.stringify({blocked})});refreshAll()}async function groupAccess(id,allowed){await api(\'/api/admin/groups/\'+encodeURIComponent(id),{method:\'PATCH\',body:JSON.stringify({allowed})});refreshAll()}async function saveContent(){await api(\'/api/admin/content\',{method:\'POST\',body:JSON.stringify({paper:paper.value,language:lang.value,question:q.value,model_answer:a.value})});q.value=\'\';a.value=\'\';refreshAll()}async function pdf(id){let r=await fetch(\'/api/admin/submissions/\'+encodeURIComponent(id)+\'/pdf\',{headers:{\'X-Admin-Token\':token}});let b=await r.blob(),u=URL.createObjectURL(b);window.open(u,\'_blank\')}if(token)show();\n</script></body></html>')
+
+@app.get("/api/admin/stats")
+def admin_stats(request: Request):
+    if not admin_authorized(request): return admin_denied()
+    s=SessionLocal()
+    try:
+        rows=s.query(DBSubmission).all(); ob=sum(float(x.total_obtained_marks or 0) for x in rows); mx=sum(float(x.total_max_marks or 0) for x in rows)
+        return {"ok":True,"users":s.query(DBUser).count(),"groups":s.query(DBGroup).count(),"submissions":len(rows),"total_obtained":round(ob,1),"total_max":round(mx,1),"average_percentage":round(ob/mx*100,1) if mx else 0}
+    finally:s.close()
+
+@app.get("/api/admin/users")
+def admin_users(request: Request):
+    if not admin_authorized(request): return admin_denied()
+    s=SessionLocal()
+    try:
+        rows=s.query(DBUser).order_by(desc(DBUser.last_seen_at)).limit(500).all()
+        return {"ok":True,"items":[{"id":u.telegram_user_id,"name":" ".join(x for x in [u.first_name,u.last_name] if x),"username":u.username,"allowed":u.is_allowed,"blocked":u.is_blocked,"submissions":s.query(DBSubmission).filter(DBSubmission.telegram_user_id==u.telegram_user_id).count()} for u in rows]}
+    finally:s.close()
+
+@app.patch("/api/admin/users/{user_id}/access")
+async def admin_user_access(user_id: str, request: Request):
+    if not admin_authorized(request): return admin_denied()
+    body=await request.json(); s=SessionLocal()
+    try:
+        u=s.get(DBUser,user_id)
+        if not u:return {"ok":False,"error":"User not found"}
+        if "blocked" in body:u.is_blocked=bool(body["blocked"])
+        if "allowed" in body:u.is_allowed=bool(body["allowed"])
+        s.commit();return {"ok":True}
+    finally:s.close()
+
+@app.get("/api/admin/groups")
+def admin_groups(request: Request):
+    if not admin_authorized(request): return admin_denied()
+    s=SessionLocal()
+    try:
+        rows=s.query(DBGroup).order_by(desc(DBGroup.last_seen_at)).limit(500).all();return {"ok":True,"items":[{"id":g.telegram_group_id,"title":g.title,"type":g.group_type,"allowed":g.is_allowed,"blocked":g.is_blocked} for g in rows]}
+    finally:s.close()
+
+@app.patch("/api/admin/groups/{group_id}")
+async def admin_group_update(group_id: str, request: Request):
+    if not admin_authorized(request): return admin_denied()
+    body=await request.json(); s=SessionLocal()
+    try:
+        g=s.get(DBGroup,group_id)
+        if not g:return {"ok":False,"error":"Group not found"}
+        if "allowed" in body:g.is_allowed=bool(body["allowed"])
+        if "blocked" in body:g.is_blocked=bool(body["blocked"])
+        s.commit();return {"ok":True}
+    finally:s.close()
+
+@app.get("/api/admin/submissions")
+def admin_submissions(request: Request, limit: int=100, paper: str=""):
+    if not admin_authorized(request): return admin_denied()
+    s=SessionLocal()
+    try:
+        q=s.query(DBSubmission).order_by(desc(DBSubmission.created_at))
+        if paper:q=q.filter(DBSubmission.paper==paper.upper())
+        rows=q.limit(min(max(limit,1),500)).all();return {"ok":True,"items":[{"id":x.id,"user_id":x.telegram_user_id,"paper":x.paper,"obtained":x.total_obtained_marks,"max":x.total_max_marks,"language":x.copy_language,"filename":x.evaluated_filename,"created_at":x.created_at.isoformat() if x.created_at else None} for x in rows]}
+    finally:s.close()
+
+@app.get("/api/admin/submissions/{submission_id}")
+def admin_submission_detail(submission_id: str, request: Request):
+    if not admin_authorized(request): return admin_denied()
+    s=SessionLocal()
+    try:
+        x=s.get(DBSubmission,submission_id)
+        if not x:return {"ok":False,"error":"Submission not found"}
+        qs=s.query(DBQuestion).filter(DBQuestion.submission_id==submission_id).all(); cs=s.query(DBPageComment).filter(DBPageComment.submission_id==submission_id).all(); aa=s.query(DBAnnotation).filter(DBAnnotation.submission_id==submission_id).all()
+        return {"ok":True,"submission":{"id":x.id,"user_id":x.telegram_user_id,"paper":x.paper,"filename":x.evaluated_filename,"obtained":x.total_obtained_marks,"max":x.total_max_marks,"language":x.copy_language,"feedback":x.overall_feedback},"questions":[{"number":q.question_number,"start_page":q.start_page,"end_page":q.end_page,"obtained":q.obtained_marks,"max":q.max_marks,"demand":q.demand_parts,"fulfilled":q.fulfilled_parts,"skipped":q.skipped_parts,"comment":q.end_page_comment} for q in qs],"comments":[{"page":c.page,"color":c.color,"comment":c.comment} for c in cs],"annotations":[{"page":a.page,"type":a.annotation_type,"color":a.color,"text":a.exact_text,"reason":a.reason,"box":a.box_2d} for a in aa]}
+    finally:s.close()
+
+@app.get("/api/admin/submissions/{submission_id}/pdf")
+def admin_submission_pdf(submission_id: str, request: Request):
+    if not admin_authorized(request): return Response(content=b"Unauthorized",status_code=401)
+    s=SessionLocal()
+    try:
+        f=s.get(DBSubmissionPDF,submission_id); sub=s.get(DBSubmission,submission_id)
+        if not f or not sub:return Response(content=b"Not found",status_code=404)
+        return Response(content=bytes(f.pdf_bytes),media_type="application/pdf",headers={"Content-Disposition":f'inline; filename="{Path(sub.evaluated_filename).name}"'})
+    finally:s.close()
+
+@app.get("/api/admin/content")
+def admin_content(request: Request):
+    if not admin_authorized(request):return admin_denied()
+    ensure_admin_content_table()
+    with engine.connect() as conn: rows=conn.exec_driver_sql("SELECT id,paper,language,question,model_answer,created_at FROM daily_content ORDER BY id DESC LIMIT 100").mappings().all()
+    return {"ok":True,"items":[dict(r) for r in rows]}
+
+@app.post("/api/admin/content")
+async def admin_content_create(request: Request):
+    if not admin_authorized(request):return admin_denied()
+    ensure_admin_content_table(); body=await request.json(); paper=str(body.get("paper","GS1")).upper(); language=str(body.get("language","Hindi")); question=str(body.get("question","")).strip(); answer=str(body.get("model_answer","")).strip(); now=_utcnow()
+    if paper not in {"GS1","GS2","GS3","GS4","GS5","GS6"} or not question:return {"ok":False,"error":"Paper and question are required"}
+    with engine.begin() as conn: row=conn.exec_driver_sql("INSERT INTO daily_content(paper,language,question,model_answer,is_active,created_at,updated_at) VALUES (%s,%s,%s,%s,TRUE,%s,%s) RETURNING id",(paper,language,question,answer,now,now)).scalar()
+    return {"ok":True,"id":row}
+
+try:
+    if DB_ENABLED: ensure_admin_content_table()
+except Exception as e: print("ADMIN INIT WARNING:",e)
 
 
 # ============================================================
