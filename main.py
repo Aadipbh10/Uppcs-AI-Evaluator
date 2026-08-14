@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import requests
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File, BackgroundTasks
 import telebot
 from PIL import Image, ImageDraw, ImageFont
 import pymupdf as fitz
@@ -212,7 +212,7 @@ def save_user_and_chat(message):
         if user_id:
             row = session.get(DBUser, user_id)
             if row is None:
-                row = DBUser(telegram_user_id=user_id, created_at=now, last_seen_at=now)
+                row = DBUser(telegram_user_id=user_id, is_allowed=False, is_blocked=False, created_at=now, last_seen_at=now)
                 session.add(row)
             row.username = getattr(user, "username", None)
             row.first_name = getattr(user, "first_name", None)
@@ -1002,6 +1002,7 @@ OUTPUT
 {{
   "total_obtained_marks": 0,
   "total_max_marks": 0,
+  "copy_language": "Hindi",
 
   "questions": [
     {{
@@ -1580,9 +1581,25 @@ def normalize_result(
         )
     ).strip()
 
+    copy_language = str(
+        data.get(
+            "copy_language",
+            ""
+        )
+    ).strip()
+    if copy_language.lower() in ("english", "en"):
+        copy_language = "English"
+    elif copy_language.lower() in ("hindi", "hi", "हिंदी"):
+        copy_language = "Hindi"
+    else:
+        copy_language = "Hindi"
+
     return {
         "total_obtained_marks":
             total_obtained,
+
+        "copy_language":
+            copy_language,
 
         "total_max_marks":
             total_max,
@@ -3526,13 +3543,31 @@ if bot:
     )
     def welcome(message):
 
+        mini_url = os.getenv(
+            "MINI_APP_URL",
+            f"{RENDER_EXTERNAL_URL}/app"
+        ).rstrip("/")
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.row(
+            telebot.types.InlineKeyboardButton(
+                "📤 Evaluate Copy",
+                web_app=telebot.types.WebAppInfo(url=mini_url)
+            )
+        )
+        markup.row(
+            telebot.types.InlineKeyboardButton(
+                "📊 My Performance",
+                web_app=telebot.types.WebAppInfo(url=mini_url + "?view=performance")
+            )
+        )
         bot.reply_to(
             message,
 
             "🏛️ <b>PRANA PCS AI Mains Evaluator</b>\n\n"
-            "अपनी answer copy की PDF/फोटो भेजें।\n"
-            "Copy receive होने के तुरंत बाद "
-            "Paper Name पूछा जाएगा।"
+            "<i>LET'S PRANA</i>\n\n"
+            "अपनी answer copy Mini App से evaluate करें।\n"
+            "Hindi copy → Hindi evaluation | English copy → English evaluation",
+            reply_markup=markup
         )
 
 
@@ -4248,6 +4283,671 @@ try:
     if DB_ENABLED: ensure_admin_content_table()
 except Exception as e: print("ADMIN INIT WARNING:",e)
 
+
+
+# ============================================================
+# PRANA PCS STUDENT MINI APP
+# ============================================================
+
+from fastapi.staticfiles import StaticFiles
+from urllib.parse import parse_qs
+from types import SimpleNamespace
+
+APP_SESSION_COOKIE = "prana_student_session"
+APP_SESSION_MAX_AGE = 60 * 60 * 6
+APP_AUTH_SECRET = hashlib.sha256((BOT_TOKEN + "|PRANA_PCS_MINI_APP").encode()).digest()
+APP_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
+
+try:
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+except Exception as e:
+    print("STATIC MOUNT WARNING:", e)
+
+
+def make_app_session(uid):
+    payload = {
+        "uid": str(uid),
+        "exp": int(time.time()) + APP_SESSION_MAX_AGE,
+    }
+    raw = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode()
+    ).decode().rstrip("=")
+    sig = hmac.new(APP_AUTH_SECRET, raw.encode(), hashlib.sha256).hexdigest()
+    return raw + "." + sig
+
+
+def current_app_uid(request: Request):
+    token = request.cookies.get(APP_SESSION_COOKIE, "")
+    if not token or "." not in token:
+        return None
+    raw, sig = token.rsplit(".", 1)
+    expected = hmac.new(APP_AUTH_SECRET, raw.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode(
+                raw + "=" * (-len(raw) % 4)
+            ).decode()
+        )
+        if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        return str(payload.get("uid", "")) or None
+    except Exception:
+        return None
+
+
+def telegram_webapp_validate(init_data: str):
+    """Validate Telegram Mini App initData according to Telegram's HMAC scheme."""
+    if not BOT_TOKEN or not init_data:
+        return None
+    try:
+        values = parse_qs(init_data, keep_blank_values=True)
+        received_hash = values.pop("hash", [""])[0]
+        if not received_hash:
+            return None
+        auth_date = int(values.get("auth_date", ["0"])[0])
+        if not auth_date or abs(int(time.time()) - auth_date) > 86400:
+            return None
+        data_check_string = "\n".join(
+            f"{key}={values[key][0]}"
+            for key in sorted(values.keys())
+        )
+        secret_key = hmac.new(
+            b"WebAppData",
+            BOT_TOKEN.encode(),
+            hashlib.sha256
+        ).digest()
+        calculated = hmac.new(
+            secret_key,
+            data_check_string.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(calculated, received_hash):
+            return None
+        user_raw = values.get("user", [""])[0]
+        user = json.loads(user_raw) if user_raw else {}
+        uid = str(user.get("id", ""))
+        if not uid:
+            return None
+        return {
+            "id": uid,
+            "username": user.get("username"),
+            "first_name": user.get("first_name"),
+            "last_name": user.get("last_name"),
+            "language_code": user.get("language_code"),
+        }
+    except Exception as e:
+        print("MINI APP AUTH ERROR:", e)
+        return None
+
+
+def ensure_app_user(user):
+    if not DB_ENABLED or SessionLocal is None:
+        return
+    session = SessionLocal()
+    try:
+        now = _utcnow()
+        uid = str(user["id"])
+        row = session.get(DBUser, uid)
+        if row is None:
+            # New Mini App users start pending. Admin/group access grants entry.
+            row = DBUser(
+                telegram_user_id=uid,
+                username=user.get("username"),
+                first_name=user.get("first_name"),
+                last_name=user.get("last_name"),
+                is_allowed=False,
+                is_blocked=False,
+                created_at=now,
+                last_seen_at=now,
+            )
+            session.add(row)
+        else:
+            row.username = user.get("username") or row.username
+            row.first_name = user.get("first_name") or row.first_name
+            row.last_name = user.get("last_name") or row.last_name
+            row.last_seen_at = now
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        print("MINI APP USER SAVE ERROR:", e)
+    finally:
+        session.close()
+
+
+def app_user_allowed(uid: str):
+    """Return (allowed, source). Direct user access wins; otherwise check allowed groups."""
+    if not DB_ENABLED or SessionLocal is None:
+        return False, "database_unavailable"
+    session = SessionLocal()
+    try:
+        user = session.get(DBUser, str(uid))
+        if user and user.is_blocked:
+            return False, "blocked"
+        if user and user.is_allowed:
+            return True, "user"
+        groups = session.query(DBGroup).filter(
+            DBGroup.is_allowed == True,
+            DBGroup.is_blocked == False
+        ).all()
+    except Exception as e:
+        print("MINI APP ACCESS DB ERROR:", e)
+        return False, "database_error"
+    finally:
+        session.close()
+
+    if not bot:
+        return False, "no_bot"
+
+    for group in groups:
+        try:
+            member = bot.get_chat_member(
+                int(group.telegram_group_id),
+                int(uid)
+            )
+            status = str(getattr(member, "status", ""))
+            if status in ("creator", "administrator", "member"):
+                return True, "group"
+        except Exception as e:
+            # Bot may not be able to inspect a group; simply try the next one.
+            print(
+                f"MINI APP GROUP CHECK FAILED {group.telegram_group_id}: {str(e)[:120]}"
+            )
+            continue
+    return False, "not_authorized"
+
+
+def require_app_user(request: Request):
+    uid = current_app_uid(request)
+    if not uid:
+        return None
+    allowed, source = app_user_allowed(uid)
+    if not allowed:
+        return None
+    return uid
+
+
+def app_error(message, status=403):
+    return Response(
+        content=json.dumps({"ok": False, "error": message}, ensure_ascii=False),
+        status_code=status,
+        media_type="application/json"
+    )
+
+
+def upsert_app_user_record(user):
+    ensure_app_user(user)
+    uid = str(user["id"])
+    session = SessionLocal()
+    try:
+        row = session.get(DBUser, uid)
+        if not row:
+            return None
+        return row
+    finally:
+        session.close()
+
+
+def app_user_payload(uid):
+    session = SessionLocal()
+    try:
+        u = session.get(DBUser, str(uid))
+        if not u:
+            return None
+        rows = session.query(DBSubmission).filter(
+            DBSubmission.telegram_user_id == str(uid),
+            DBSubmission.status == "completed"
+        ).order_by(desc(DBSubmission.created_at)).all()
+        obtained = sum(float(x.total_obtained_marks or 0) for x in rows)
+        maximum = sum(float(x.total_max_marks or 0) for x in rows)
+        return {
+            "id": u.telegram_user_id,
+            "name": " ".join(x for x in [u.first_name, u.last_name] if x) or "Student",
+            "username": u.username,
+            "submissions": len(rows),
+            "obtained": round(obtained, 1),
+            "max": round(maximum, 1),
+            "average_percentage": round(obtained / maximum * 100, 1) if maximum else 0,
+        }
+    finally:
+        session.close()
+
+
+@app.get("/app", response_class=HTMLResponse)
+def student_mini_app():
+    html_path = STATIC_DIR / "mini_app.html"
+    if not html_path.exists():
+        return HTMLResponse("Mini App build missing.", status_code=500)
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@app.post("/api/app/auth")
+async def app_auth(request: Request):
+    body = await request.json()
+    init_data = str(body.get("initData", ""))
+    user = telegram_webapp_validate(init_data)
+    if not user:
+        return app_error("Telegram authentication invalid or expired.", 401)
+
+    ensure_app_user(user)
+    allowed, source = app_user_allowed(user["id"])
+    if not allowed:
+        if source == "blocked":
+            return app_error("आपका access blocked है। Admin से संपर्क करें।", 403)
+        return app_error("Mini App access अभी enabled नहीं है। Admin/group access मिलने के बाद दोबारा खोलें।", 403)
+
+    response = Response(
+        content=json.dumps({
+            "ok": True,
+            "user": app_user_payload(user["id"]),
+            "access_source": source,
+        }, ensure_ascii=False),
+        media_type="application/json"
+    )
+    response.set_cookie(
+        APP_SESSION_COOKIE,
+        make_app_session(user["id"]),
+        max_age=APP_SESSION_MAX_AGE,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/"
+    )
+    return response
+
+
+@app.get("/api/app/me")
+def app_me(request: Request):
+    uid = require_app_user(request)
+    if not uid:
+        return app_error("Unauthorized", 401)
+    return {"ok": True, "user": app_user_payload(uid)}
+
+
+@app.get("/api/app/dashboard")
+def app_dashboard(request: Request):
+    uid = require_app_user(request)
+    if not uid:
+        return app_error("Unauthorized", 401)
+    session = SessionLocal()
+    try:
+        rows = session.query(DBSubmission).filter(
+            DBSubmission.telegram_user_id == uid,
+            DBSubmission.status == "completed"
+        ).order_by(desc(DBSubmission.created_at)).all()
+        by_paper = {}
+        for x in rows:
+            b = by_paper.setdefault(x.paper, {"submissions": 0, "obtained": 0.0, "max": 0.0})
+            b["submissions"] += 1
+            b["obtained"] += float(x.total_obtained_marks or 0)
+            b["max"] += float(x.total_max_marks or 0)
+        for b in by_paper.values():
+            b["percentage"] = round(b["obtained"] / b["max"] * 100, 1) if b["max"] else 0
+            b["obtained"] = round(b["obtained"], 1)
+            b["max"] = round(b["max"], 1)
+        recent = [{
+            "id": x.id,
+            "paper": x.paper,
+            "obtained": x.total_obtained_marks,
+            "max": x.total_max_marks,
+            "language": x.copy_language,
+            "created_at": x.created_at.isoformat() if x.created_at else None,
+            "status": x.status,
+        } for x in rows[:8]]
+        return {
+            "ok": True,
+            "user": app_user_payload(uid),
+            "paper_stats": by_paper,
+            "recent": recent,
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/app/daily")
+def app_daily(request: Request, language: str = "Hindi"):
+    uid = require_app_user(request)
+    if not uid:
+        return app_error("Unauthorized", 401)
+    ensure_admin_content_table()
+    lang = "English" if str(language).lower().startswith("en") else "Hindi"
+    with engine.connect() as conn:
+        row = conn.exec_driver_sql(
+            "SELECT id,paper,language,question,model_answer,created_at FROM daily_content WHERE is_active=TRUE AND language=%s ORDER BY id DESC LIMIT 1",
+            (lang,)
+        ).mappings().first()
+    return {"ok": True, "item": dict(row) if row else None}
+
+
+@app.get("/api/app/evaluations")
+def app_evaluations(request: Request, paper: str = "", limit: int = 50):
+    uid = require_app_user(request)
+    if not uid:
+        return app_error("Unauthorized", 401)
+    session = SessionLocal()
+    try:
+        q = session.query(DBSubmission).filter(
+            DBSubmission.telegram_user_id == uid,
+            DBSubmission.status == "completed"
+        ).order_by(desc(DBSubmission.created_at))
+        if paper:
+            q = q.filter(DBSubmission.paper == paper.upper())
+        rows = q.limit(min(max(int(limit), 1), 100)).all()
+        return {"ok": True, "items": [{
+            "id": x.id,
+            "paper": x.paper,
+            "obtained": x.total_obtained_marks,
+            "max": x.total_max_marks,
+            "percentage": round(float(x.total_obtained_marks or 0) / float(x.total_max_marks or 1) * 100, 1),
+            "language": x.copy_language,
+            "filename": x.original_filename,
+            "evaluated_filename": x.evaluated_filename,
+            "created_at": x.created_at.isoformat() if x.created_at else None,
+        } for x in rows]}
+    finally:
+        session.close()
+
+
+@app.get("/api/app/evaluations/{submission_id}")
+def app_evaluation_detail(submission_id: str, request: Request):
+    uid = require_app_user(request)
+    if not uid:
+        return app_error("Unauthorized", 401)
+    session = SessionLocal()
+    try:
+        x = session.get(DBSubmission, submission_id)
+        if not x or x.telegram_user_id != uid:
+            return app_error("Evaluation not found", 404)
+        qs = session.query(DBQuestion).filter(DBQuestion.submission_id == submission_id).order_by(DBQuestion.question_number).all()
+        comments = session.query(DBPageComment).filter(DBPageComment.submission_id == submission_id).order_by(DBPageComment.page, DBPageComment.id).all()
+        annotations = session.query(DBAnnotation).filter(DBAnnotation.submission_id == submission_id).order_by(DBAnnotation.page, DBAnnotation.id).all()
+        return {
+            "ok": True,
+            "submission": {
+                "id": x.id,
+                "paper": x.paper,
+                "language": x.copy_language,
+                "obtained": x.total_obtained_marks,
+                "max": x.total_max_marks,
+                "percentage": round(float(x.total_obtained_marks or 0) / float(x.total_max_marks or 1) * 100, 1),
+                "feedback": x.overall_feedback,
+                "filename": x.evaluated_filename,
+                "created_at": x.created_at.isoformat() if x.created_at else None,
+            },
+            "questions": [{
+                "number": q.question_number,
+                "start_page": q.start_page,
+                "end_page": q.end_page,
+                "obtained": q.obtained_marks,
+                "max": q.max_marks,
+                "demand": q.demand_parts or [],
+                "fulfilled": q.fulfilled_parts or [],
+                "skipped": q.skipped_parts or [],
+                "comment": q.end_page_comment or "",
+            } for q in qs],
+            "comments": [{
+                "page": c.page,
+                "color": c.color,
+                "comment": c.comment,
+            } for c in comments],
+            "annotations": [{
+                "page": a.page,
+                "type": a.annotation_type,
+                "color": a.color,
+                "text": a.exact_text,
+                "reason": a.reason,
+            } for a in annotations],
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/app/evaluations/{submission_id}/pdf")
+def app_evaluation_pdf(submission_id: str, request: Request):
+    uid = require_app_user(request)
+    if not uid:
+        return Response(content=b"Unauthorized", status_code=401)
+    session = SessionLocal()
+    try:
+        sub = session.get(DBSubmission, submission_id)
+        f = session.get(DBSubmissionPDF, submission_id)
+        if not sub or sub.telegram_user_id != uid or not f:
+            return Response(content=b"Not found", status_code=404)
+        return Response(
+            content=bytes(f.pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{Path(sub.evaluated_filename).name}"'}
+        )
+    finally:
+        session.close()
+
+
+def create_webapp_submission(uid, paper, filename):
+    submission_id = str(uuid.uuid4())
+    now = _utcnow()
+    session = SessionLocal()
+    try:
+        row = DBSubmission(
+            id=submission_id,
+            telegram_user_id=str(uid),
+            telegram_chat_id=None,
+            chat_type="web_app",
+            group_id=None,
+            paper=paper,
+            original_filename=filename,
+            evaluated_filename=f"{Path(filename).stem}_Evaluated.pdf",
+            copy_language=None,
+            total_obtained_marks=None,
+            total_max_marks=None,
+            overall_feedback=None,
+            status="processing",
+            created_at=now,
+            completed_at=None,
+        )
+        session.add(row)
+        session.commit()
+        return submission_id
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def run_webapp_evaluation(submission_id, uid, path, paper, original_filename):
+    try:
+        final_pdf, result = process_submission(path, paper)
+        evaluated_filename = f"{Path(original_filename).stem or 'submission'}_Evaluated.pdf"
+        session = SessionLocal()
+        try:
+            row = session.get(DBSubmission, submission_id)
+            if not row:
+                raise Exception("Submission record not found")
+            row.evaluated_filename = evaluated_filename
+            row.copy_language = result.get("copy_language") or None
+            row.total_obtained_marks = float(result.get("total_obtained_marks", 0) or 0)
+            row.total_max_marks = float(result.get("total_max_marks", 0) or 0)
+            row.overall_feedback = str(result.get("overall_feedback", ""))
+            row.status = "completed"
+            row.completed_at = _utcnow()
+            session.add(DBSubmissionPDF(
+                submission_id=submission_id,
+                pdf_bytes=final_pdf.getvalue(),
+                created_at=_utcnow()
+            ))
+            for q in result.get("questions", []):
+                session.add(DBQuestion(
+                    submission_id=submission_id,
+                    question_number=int(q.get("question_number", 0)),
+                    start_page=int(q.get("start_page", 1)),
+                    end_page=int(q.get("end_page", 1)),
+                    pages_used=int(q.get("pages_used", 1)),
+                    max_marks=float(q.get("max_marks", 0) or 0),
+                    obtained_marks=float(q.get("obtained_marks", 0) or 0),
+                    demand_parts=q.get("demand_parts", []),
+                    fulfilled_parts=q.get("fulfilled_parts", []),
+                    skipped_parts=q.get("skipped_parts", []),
+                    end_page_comment=str(q.get("end_page_comment", "")),
+                ))
+            for c in result.get("page_comments", []):
+                session.add(DBPageComment(
+                    submission_id=submission_id,
+                    page=int(c.get("page", 1) or 1),
+                    color=str(c.get("color", "red")),
+                    comment=str(c.get("comment", "")),
+                    placement_box=c.get("placement_box"),
+                    anchor=c.get("anchor"),
+                ))
+            for a in result.get("annotations", []):
+                session.add(DBAnnotation(
+                    submission_id=submission_id,
+                    page=int(a.get("page", 1) or 1),
+                    annotation_type=str(a.get("type", "good")),
+                    color=str(a.get("color", "green")),
+                    exact_text=str(a.get("exact_text", "")),
+                    reason=str(a.get("reason", "")),
+                    box_2d=a.get("box_2d"),
+                ))
+            session.commit()
+            print(f"MINI APP EVALUATION COMPLETE: {submission_id}")
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except Exception as e:
+        print("MINI APP EVALUATION ERROR:", e)
+        session = SessionLocal()
+        try:
+            row = session.get(DBSubmission, submission_id)
+            if row:
+                row.status = "failed"
+                row.overall_feedback = str(e)[:500]
+                row.completed_at = _utcnow()
+                session.commit()
+        except Exception as db_error:
+            session.rollback()
+            print("MINI APP FAILURE STATUS ERROR:", db_error)
+        finally:
+            session.close()
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
+@app.post("/api/app/evaluate")
+async def app_evaluate(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    paper: str = "",
+    files: list[UploadFile] = File(...),
+):
+    uid = require_app_user(request)
+    if not uid:
+        return app_error("Unauthorized", 401)
+    paper = str(paper).upper().strip()
+    if paper not in {"GS1", "GS2", "GS3", "GS4", "GS5", "GS6"}:
+        return app_error("Valid Paper GS1-GS6 चुनें।", 400)
+    if not files:
+        return app_error("Copy upload करें।", 400)
+
+    total_bytes = 0
+    prepared = []
+    try:
+        for upload in files[:12]:
+            data = await upload.read()
+            total_bytes += len(data)
+            if total_bytes > APP_MAX_UPLOAD_BYTES:
+                return app_error("Copy size 20 MB से अधिक नहीं होनी चाहिए।", 413)
+            if not data:
+                continue
+            name = upload.filename or "copy"
+            suffix = Path(name).suffix.lower()
+            if suffix not in {".pdf", ".jpg", ".jpeg", ".png", ".webp"}:
+                return app_error("केवल PDF/JPG/JPEG/PNG/WEBP files allowed हैं।", 400)
+            prepared.append((name, data))
+    finally:
+        for upload in files:
+            try:
+                await upload.close()
+            except Exception:
+                pass
+
+    if not prepared:
+        return app_error("Valid copy file नहीं मिला।", 400)
+
+    # One PDF is used directly. Multiple images are merged into one PDF.
+    if len(prepared) == 1 and Path(prepared[0][0]).suffix.lower() == ".pdf":
+        original_filename = prepared[0][0]
+        path = save_submission(prepared[0][1], ".pdf")
+    else:
+        images = []
+        for name, data in prepared:
+            try:
+                image = Image.open(io.BytesIO(data)).convert("RGB")
+                images.append(image)
+            except Exception:
+                return app_error(f"Image पढ़ी नहीं जा सकी: {name}", 400)
+        pdf_buffer = io.BytesIO()
+        images[0].save(
+            pdf_buffer,
+            format="PDF",
+            save_all=True,
+            append_images=images[1:]
+        )
+        original_filename = f"Prana_Copy_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        path = save_submission(pdf_buffer.getvalue(), ".pdf")
+
+    submission_id = create_webapp_submission(uid, paper, original_filename)
+    background_tasks.add_task(
+        run_webapp_evaluation,
+        submission_id,
+        uid,
+        path,
+        paper,
+        original_filename,
+    )
+    return {
+        "ok": True,
+        "submission_id": submission_id,
+        "status": "processing",
+        "paper": paper,
+        "filename": original_filename,
+    }
+
+
+@app.get("/api/app/evaluation-status/{submission_id}")
+def app_evaluation_status(submission_id: str, request: Request):
+    uid = require_app_user(request)
+    if not uid:
+        return app_error("Unauthorized", 401)
+    session = SessionLocal()
+    try:
+        row = session.get(DBSubmission, submission_id)
+        if not row or row.telegram_user_id != uid:
+            return app_error("Evaluation not found", 404)
+        return {
+            "ok": True,
+            "id": row.id,
+            "status": row.status,
+            "paper": row.paper,
+            "language": row.copy_language,
+            "obtained": row.total_obtained_marks,
+            "max": row.total_max_marks,
+        }
+    finally:
+        session.close()
+
+
+# ============================================================
+# MINI APP BRANDING / STATIC FILES
+# ============================================================
 
 # ============================================================
 # MAIN
