@@ -16,30 +16,29 @@ app = FastAPI()
 
 @app.get("/")
 def health_check():
-    return {"status": "PRANA PCS Telegram Chat Evaluator is 100% Running!"}
+    return {"status": "PRANA PCS Telegram Chat Evaluator is 100% Active!"}
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML") if BOT_TOKEN else None
 
 def get_best_available_model():
-    """आपकी API Key पर उपलब्ध एक्टिव Flash मॉडल को ऑटो-डिटेक्ट करना"""
+    """आपकी API Key पर उपलब्ध एक्टिव Gemini 3.x Flash मॉडल का चुनाव"""
     try:
         models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
         r = requests.get(models_url, timeout=10)
         if r.status_code == 200:
             available = [m['name'] for m in r.json().get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', [])]
-            # Flash मॉडल्स की प्राथमिकता सूची
-            for target in ["models/gemini-2.0-flash", "models/gemini-1.5-flash", "models/gemini-1.5-flash-latest", "models/gemini-1.5-pro", "models/gemini-pro"]:
+            # नवीनतम मॉडल्स की प्राथमिकता क्रम
+            for target in ["models/gemini-3.7-flash", "models/gemini-3.6-flash", "models/gemini-3.5-flash", "models/gemini-2.5-flash"]:
                 if target in available:
                     return target
             if available:
                 return available[0]
     except Exception:
         pass
-    return "models/gemini-1.5-flash-latest"
+    return "models/gemini-3.6-flash"
 
 def evaluate_with_gemini(images_b64, total_pages):
     active_model = get_best_available_model()
-    # अगर नाम में पहले से 'models/' लगा है तो सही URL बनाना
     model_name = active_model.replace("models/", "")
     
     parts = []
