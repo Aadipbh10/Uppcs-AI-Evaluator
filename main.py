@@ -30,11 +30,22 @@ FONT_URL = (
 PENDING = {}
 
 # Current production-ready Gemini models.
-MODELS = [
+# Preferred models are only a ranking. At runtime we ask Gemini which
+# models are actually available to THIS API key and which support
+# generateContent. This prevents 404 failures from retired/unavailable
+# model IDs.
+PREFERRED_MODELS = [
+    "gemini-3.7-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
-    "gemini-2.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3-flash-preview",
 ]
+
+MODEL_CACHE = {
+    "models": [],
+    "expires_at": 0
+}
 
 RUBRICS = {
     "GS1": """GS1: History-Art-Culture, Geography, Indian Society.
@@ -139,11 +150,33 @@ def startup():
 
 @app.get("/")
 def home():
+    try:
+        available_models = get_available_gemini_models()
+        model_status = available_models[:8]
+    except Exception as e:
+        model_status = [f"discovery-error: {str(e)[:120]}"]
+
     return {
         "status": "PRANA PCS AI Evaluator Active",
         "font": os.path.exists(FONT_PATH),
-        "engine": "bilingual-answer-language-v8"
+        "engine": "bilingual-answer-language-v9-dynamic-models",
+        "gemini_models": model_status
     }
+
+
+@app.get("/api/model-status")
+def model_status():
+    try:
+        models = get_available_gemini_models(force_refresh=True)
+        return {
+            "ok": True,
+            "generate_content_models": models[:30]
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e)[:1000]
+        }
 
 
 @app.post("/webhook")
@@ -374,8 +407,91 @@ OUTPUT — ONLY VALID JSON
 """
 
 
+def get_available_gemini_models(force_refresh=False):
+    """
+    Discover models available to the current GEMINI_API_KEY.
+
+    Google exposes GET /v1beta/models and returns the supported actions for
+    each model. We only select models that support generateContent. This is
+    deliberately dynamic so a deprecated/region/account-specific model does
+    not break the evaluator.
+    """
+    import time
+
+    now = time.time()
+    if (
+        not force_refresh
+        and MODEL_CACHE["models"]
+        and MODEL_CACHE["expires_at"] > now
+    ):
+        return MODEL_CACHE["models"]
+
+    if not GEMINI_API_KEY:
+        raise Exception("GEMINI_API_KEY is missing.")
+
+    url = (
+        "https://generativelanguage.googleapis.com/"
+        "v1beta/models"
+    )
+
+    response = requests.get(
+        url,
+        params={"key": GEMINI_API_KEY, "pageSize": 1000},
+        timeout=30
+    )
+
+    if response.status_code != 200:
+        raise Exception(
+            "Gemini model discovery failed: "
+            f"HTTP {response.status_code} "
+            f"{response.text[:300]}"
+        )
+
+    payload = response.json()
+    available = []
+
+    for item in payload.get("models", []):
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+
+        model_id = name.split("/", 1)[-1]
+
+        methods = item.get("supportedGenerationMethods", [])
+        methods = [str(x) for x in methods]
+
+        # Only models that can process the standard generateContent request.
+        if "generateContent" not in methods:
+            continue
+
+        available.append(model_id)
+
+    # Rank known preferred models first, then keep any other compatible
+    # generateContent model as a final emergency fallback.
+    ranked = []
+    for preferred in PREFERRED_MODELS:
+        if preferred in available and preferred not in ranked:
+            ranked.append(preferred)
+
+    for model_id in available:
+        if model_id not in ranked:
+            ranked.append(model_id)
+
+    MODEL_CACHE["models"] = ranked
+    MODEL_CACHE["expires_at"] = now + 900  # 15 minutes
+
+    print("AVAILABLE GEMINI MODELS:", ranked[:20])
+    return ranked
+
+
+def invalidate_model_cache():
+    MODEL_CACHE["models"] = []
+    MODEL_CACHE["expires_at"] = 0
+
+
 def call_gemini(images, paper):
     parts = []
+
     for image_bytes in images:
         parts.append({
             "inline_data": {
@@ -384,45 +500,159 @@ def call_gemini(images, paper):
             }
         })
 
-    parts.append({"text": build_prompt(paper, len(images))})
+    parts.append({
+        "text": build_prompt(
+            paper,
+            len(images)
+        )
+    })
 
     payload = {
-        "contents": [{"parts": parts}],
+        "contents": [
+            {
+                "parts": parts
+            }
+        ],
         "generationConfig": {
             "response_mime_type": "application/json"
         }
     }
 
-    last_error = ""
+    # First attempt: dynamically discover models available to this API key.
+    try:
+        models = get_available_gemini_models()
+    except Exception as discovery_error:
+        # If discovery itself fails, use only modern known IDs.
+        # This fallback is intentionally free of gemini-2.5-flash.
+        print("MODEL DISCOVERY ERROR:", discovery_error)
+        models = list(PREFERRED_MODELS)
 
-    for model in MODELS:
+    if not models:
+        raise Exception(
+            "इस Gemini API key के लिए generateContent वाला कोई "
+            "available model नहीं मिला।"
+        )
+
+    errors = []
+
+    for model in models:
         url = (
             "https://generativelanguage.googleapis.com/"
             f"v1beta/models/{model}:generateContent"
             f"?key={GEMINI_API_KEY}"
         )
+
         try:
-            response = requests.post(url, json=payload, timeout=240)
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=240
+            )
+
+            if response.status_code == 200:
+                body = response.json()
+
+                try:
+                    raw = (
+                        body["candidates"][0]
+                        ["content"]["parts"][0]["text"]
+                    )
+                except (KeyError, IndexError, TypeError) as e:
+                    raise Exception(
+                        f"{model}: unexpected Gemini response: "
+                        f"{str(e)}"
+                    )
+
+                return normalize_result(
+                    json.loads(raw),
+                    len(images)
+                )
+
+            error_text = response.text[:500]
+            errors.append(
+                f"{model}: HTTP {response.status_code} {error_text}"
+            )
+
+            # 404/400 for one model means this particular model is not
+            # usable for this key/request. Continue to the next discovered
+            # compatible model instead of aborting the whole evaluation.
+            if response.status_code in (
+                400, 404, 409, 429, 500, 502, 503, 504
+            ):
+                continue
+
+            # Authentication/permission errors are worth surfacing, but
+            # continue once in case the API has model-specific permissions.
+            if response.status_code in (401, 403):
+                continue
+
+        except requests.RequestException as e:
+            errors.append(f"{model}: network error: {str(e)[:250]}")
+            continue
+
+        except json.JSONDecodeError as e:
+            errors.append(
+                f"{model}: invalid JSON returned by model: {str(e)}"
+            )
+            continue
+
+        except Exception as e:
+            errors.append(f"{model}: {str(e)[:300]}")
+            continue
+
+    # One fresh discovery pass can recover from a model being retired while
+    # the cache is still warm.
+    invalidate_model_cache()
+
+    try:
+        fresh_models = get_available_gemini_models(force_refresh=True)
+    except Exception:
+        fresh_models = []
+
+    already_tried = set(models)
+
+    for model in fresh_models:
+        if model in already_tried:
+            continue
+
+        url = (
+            "https://generativelanguage.googleapis.com/"
+            f"v1beta/models/{model}:generateContent"
+            f"?key={GEMINI_API_KEY}"
+        )
+
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=240
+            )
 
             if response.status_code == 200:
                 raw = (
                     response.json()["candidates"][0]
                     ["content"]["parts"][0]["text"]
                 )
-                return normalize_result(json.loads(raw), len(images))
+                return normalize_result(
+                    json.loads(raw),
+                    len(images)
+                )
 
-            last_error = (
+            errors.append(
                 f"{model}: HTTP {response.status_code} "
-                f"{response.text[:250]}"
+                f"{response.text[:300]}"
             )
 
-            if response.status_code not in (429, 500, 502, 503, 504):
-                break
-
         except Exception as e:
-            last_error = str(e)
+            errors.append(f"{model}: {str(e)[:300]}")
 
-    raise Exception("Gemini evaluation failed: " + last_error)
+    # Keep the error readable in Telegram while preserving enough detail
+    # to diagnose an account/model access issue.
+    summary = " | ".join(errors[-6:])
+    raise Exception(
+        "Gemini evaluation failed after trying all available models. "
+        + summary[:1800]
+    )
 
 
 def normalize_result(data, pages):
