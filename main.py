@@ -4,6 +4,7 @@ import json
 import base64
 import tempfile
 import uuid
+import re
 from datetime import datetime, timezone
 import requests
 from pathlib import Path
@@ -4107,41 +4108,48 @@ button,input,select,textarea{font:inherit}.top{position:sticky;top:0;z-index:20;
 <div id="app" class="hidden"><div class="top"><div class="brand">🏛️ PRANA PCS — Admin Panel</div><div class="topright"><span id="who"></span><button class="btn gray" onclick="logout()">Logout</button></div></div>
 <div class="wrap"><div class="tabs"><button class="btn tab active" data-tab="dashboard" onclick="tab('dashboard',this)">📊 Dashboard</button><button class="btn tab" data-tab="users" onclick="tab('users',this)">👥 Students</button><button class="btn tab" data-tab="groups" onclick="tab('groups',this)">👥 Groups</button><button class="btn tab" data-tab="submissions" onclick="tab('submissions',this)">📄 Evaluations</button><button class="btn tab" data-tab="content" onclick="tab('content',this)">📝 Daily Content</button><button class="btn tab" data-tab="admins" id="adminTab" onclick="tab('admins',this)">👑 Admins</button></div>
 <section id="dashboard" class="tabsec"><div id="stats" class="grid"></div><div class="card"><div class="sectionhead"><h2>📈 Paper-wise Performance</h2><button class="btn ghost" onclick="refreshAll()">↻ Refresh</button></div><div id="paperStats" class="metricgrid"></div></div><div class="section card"><div class="sectionhead"><h2>🕘 Recent Evaluations</h2></div><div id="recent"></div></div></section>
-<section id="users" class="tabsec hidden"><div class="sectionhead"><div><h2>👥 Students / Users</h2><p style="color:#667085;margin-top:-8px">Access, submissions और individual performance manage करें।</p></div><div class="toolbar"><input id="userSearch" class="input search" placeholder="Telegram ID / name / username" oninput="filterUsers()"><button class="btn ghost" onclick="loadUsers()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>User</th><th>Status</th><th>Copies</th><th>Average</th><th>Last Seen</th><th>Access</th><th>Performance</th></tr></thead><tbody id="usersBody"></tbody></table></div></section>
-<section id="groups" class="tabsec hidden"><div class="sectionhead"><div><h2>👥 Telegram Groups</h2><p style="color:#667085;margin-top:-8px">पूरे Telegram group को access दे या हटाएँ।</p></div><button class="btn ghost" onclick="loadGroups()">↻ Refresh</button></div><div class="tablewrap"><table class="table"><thead><tr><th>Group</th><th>Type</th><th>Status</th><th>Last Seen</th><th>Access</th></tr></thead><tbody id="groupsBody"></tbody></table></div></section>
+<section id="users" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Student</h2><p style="color:#667085;margin-top:-8px">Telegram User ID से student manually जोड़ें और access तुरंत enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1.2fr 1fr 1fr 1fr auto"><input id="newStudentId" class="input" placeholder="Telegram User ID"><input id="newStudentUsername" class="input" placeholder="@username (optional)"><input id="newStudentFirst" class="input" placeholder="First name (optional)"><input id="newStudentLast" class="input" placeholder="Last name (optional)"><button class="btn green" onclick="addStudent()">➕ Add Student</button></div></div><div class="sectionhead"><div><h2>👥 Students / Users</h2><p style="color:#667085;margin-top:-8px">Access, submissions और individual performance manage करें।</p></div><div class="toolbar"><input id="userSearch" class="input search" placeholder="Telegram ID / name / username" oninput="filterUsers()"><button class="btn ghost" onclick="loadUsers()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>User</th><th>Status</th><th>Copies</th><th>Average</th><th>Last Seen</th><th>Access</th><th>Performance</th></tr></thead><tbody id="usersBody"></tbody></table></div></section>
+<section id="groups" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Telegram Group</h2><p style="color:#667085;margin-top:-8px">Group ID से group manually जोड़ें और access enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1.4fr 1fr 1fr auto"><input id="newGroupId" class="input" placeholder="Telegram Group ID (जैसे -100...)"><input id="newGroupTitle" class="input" placeholder="Group title"><select id="newGroupType" class="input"><option value="supergroup">Supergroup</option><option value="group">Group</option></select><button class="btn green" onclick="addGroup()">➕ Add Group</button></div></div><div class="sectionhead"><div><h2>👥 Telegram Groups</h2><p style="color:#667085;margin-top:-8px">पूरे Telegram group को access दे या हटाएँ।</p></div><button class="btn ghost" onclick="loadGroups()">↻ Refresh</button></div><div class="tablewrap"><table class="table"><thead><tr><th>Group</th><th>Type</th><th>Status</th><th>Last Seen</th><th>Access</th></tr></thead><tbody id="groupsBody"></tbody></table></div></section>
 <section id="submissions" class="tabsec hidden"><div class="sectionhead"><div><h2>📄 Evaluated Copies</h2><p style="color:#667085;margin-top:-8px">हर evaluation की details, marks और PDF.</p></div><div class="toolbar"><select id="subPaper" class="input" onchange="loadSubmissions()"><option value="">All Papers</option><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><input id="subSearch" class="input search" placeholder="User ID / filename" oninput="filterSubs()"><button class="btn ghost" onclick="loadSubmissions()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>Date</th><th>User</th><th>Paper</th><th>Marks</th><th>Language</th><th>Filename</th><th>Actions</th></tr></thead><tbody id="subsBody"></tbody></table></div></section>
-<section id="content" class="tabsec hidden"><div class="card"><h2>📝 Daily Question + Model Answer</h2><div style="margin-bottom:10px"><button class="btn blue" onclick="downloadContentPdf()">📥 Download All as Branded PDF</button></div><div class="formgrid"><select id="paper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><select id="lang" class="input"><option>Hindi</option><option>English</option></select><textarea id="q" class="input" rows="5" placeholder="Daily Question"></textarea><textarea id="a" class="input" rows="5" placeholder="Model Answer"></textarea><button class="btn green" onclick="saveContent()">Save</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Created</th><th>Action</th></tr></thead><tbody id="contentBody"></tbody></table></div></section>
+<section id="content" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>📝 Daily Questions + Model Answers</h2><p style="color:#667085;margin-top:-8px">एक साथ जितने चाहें questions जोड़ें। कोई daily question limit नहीं।</p></div><div class="toolbar"><button class="btn blue" onclick="downloadContentPdf()">📥 Download All as Branded PDF</button><button class="btn ghost" onclick="addQuestionRow()">➕ Add Question</button></div></div><div id="bulkQuestions"></div><div class="toolbar" style="margin-top:12px"><button class="btn green" onclick="saveBulkContent()">💾 Save All Questions</button><button class="btn ghost" onclick="clearQuestionRows()">Clear Draft</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Created</th><th>Action</th></tr></thead><tbody id="contentBody"></tbody></table></div></section>
 <section id="admins" class="tabsec hidden"><div class="card"><h2>👑 Admin Management</h2><p>केवल Super Admin दूसरे Admin accounts जोड़/हटा सकता है।</p><div class="toolbar"><input id="adminId" class="input" placeholder="Telegram User ID"><button class="btn blue" onclick="addAdmin()">➕ Add Admin</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>Telegram ID</th><th>Role</th><th>Status</th><th>Last Login</th><th>Action</th></tr></thead><tbody id="adminsBody"></tbody></table></div></section>
 </div></div>
 <div id="modal" class="modal hidden" onclick="if(event.target===this)closeModal()"><div class="modalbox"><button class="btn gray close" onclick="closeModal()">Close</button><div id="modalBody"></div></div></div>
 <script>
-let USER_ROWS=[],SUB_ROWS=[];
+let USER_ROWS=[],SUB_ROWS=[],CONTENT_DRAFT=[];
 function esc(s){return String(s??'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[x]))}
 function fmtDate(s){if(!s)return '-';try{return new Date(s).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})}catch{return s}}
 async function api(p,o={}){o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});let r=await fetch(p,o),d=await r.json().catch(()=>({}));if(r.status==401||r.status==403)throw Error(d.error||'Unauthorized');if(!r.ok||d.ok===false)throw Error(d.error||'Request failed');return d}
 async function onTelegramAuth(user){try{let d=await api('/api/admin/telegram-login',{method:'POST',body:JSON.stringify(user)});if(d.ok)show()}catch(e){document.getElementById('err').textContent='❌ '+e.message}}
 async function show(){let m=await api('/api/admin/me');if(!m.authenticated){login.classList.remove('hidden');app.classList.add('hidden');return}login.classList.add('hidden');app.classList.remove('hidden');who.textContent=(m.role==='super_admin'?'👑 Super Admin':'👤 Admin')+' · '+m.telegram_user_id;adminTab.classList.toggle('hidden',m.role!=='super_admin');refreshAll()}
 async function logout(){await fetch('/api/admin/logout',{method:'POST'});location.reload()}
-function tab(id,el){document.querySelectorAll('.tabsec').forEach(x=>x.classList.add('hidden'));document.getElementById(id).classList.remove('hidden');document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));el.classList.add('active');if(id==='users')loadUsers();if(id==='groups')loadGroups();if(id==='submissions')loadSubmissions();if(id==='content')loadContent();if(id==='admins')loadAdmins()}
+function tab(id,el){document.querySelectorAll('.tabsec').forEach(x=>x.classList.add('hidden'));document.getElementById(id).classList.remove('hidden');document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));el.classList.add('active');if(id==='users')loadUsers();if(id==='groups')loadGroups();if(id==='submissions')loadSubmissions();if(id==='content'){if(!document.querySelector('.bulk-q-row'))addQuestionRow();loadContent();}if(id==='admins')loadAdmins()}
 async function refreshAll(){try{let [s,u,p]=await Promise.all([api('/api/admin/stats'),api('/api/admin/users?limit=500'),api('/api/admin/submissions?limit=100')]);stats.innerHTML=`<div class="card stat"><small>Students</small><b>${s.users}</b></div><div class="card stat"><small>Groups</small><b>${s.groups}</b></div><div class="card stat"><small>Evaluations</small><b>${s.submissions}</b></div><div class="card stat"><small>Average</small><b>${s.average_percentage}%</b></div><div class="card stat"><small>Marks</small><b>${s.total_obtained}/${s.total_max}</b></div><div class="card stat"><small>Completion</small><b>${s.completed_submissions}</b></div>`;renderPaperStats(s.paper_stats||{});renderRecent(p.items||[]);USER_ROWS=u.items||[];SUB_ROWS=p.items||[]}catch(e){if(e.message==='Unauthorized')location.reload();else alert(e.message)}}
 function renderPaperStats(ps){paperStats.innerHTML=Object.entries(ps).map(([k,v])=>`<div class="metric"><b>${esc(k)}</b><span>${v.submissions} copies · ${v.average_percentage}%</span><div class="bar" style="margin-top:8px"><i style="width:${Math.min(100,Math.max(0,v.average_percentage))}%"></i></div></div>`).join('')||'<div class="empty">अभी कोई evaluation नहीं है।</div>'}
 function renderRecent(rows){recent.innerHTML=rows.slice(0,10).map(x=>`<div style="padding:12px 0;border-bottom:1px solid #eee"><b>${esc(x.paper)} · ${esc(x.obtained)}/${esc(x.max)}</b> · ${esc(x.user_id)} <span style="color:#667085">${fmtDate(x.created_at)}</span><br><small>${esc(x.filename||'')}</small></div>`).join('')||'<div class="empty">अभी कोई evaluation नहीं है।</div>'}
 function filterUsers(){let q=userSearch.value.toLowerCase();renderUsers(USER_ROWS.filter(x=>(x.id+' '+x.name+' '+(x.username||'')).toLowerCase().includes(q)))}
 function renderUsers(rows){usersBody.innerHTML=rows.map(x=>`<tr><td><b>${esc(x.name||'Unknown')}</b><br><small>${esc(x.username?'@'+x.username:'')}<br>${esc(x.id)}</small></td><td>${x.blocked?'<span class="pill bad">Blocked</span>':x.allowed?'<span class="pill ok">Allowed</span>':'<span class="pill">Pending</span>'}</td><td>${x.submissions}</td><td><b>${x.average_percentage||0}%</b><br><small>${x.obtained||0}/${x.max||0}</small></td><td>${fmtDate(x.last_seen)}</td><td><button class="btn ${x.blocked?'green':'red'}" onclick="userAccess('${esc(x.id)}',${x.blocked?'false':'true'})">${x.blocked?'Allow':'Block'}</button></td><td><button class="btn blue" onclick="userDetail('${esc(x.id)}')">View</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">कोई user नहीं मिला।</td></tr>'}
 async function loadUsers(){try{let d=await api('/api/admin/users?limit=500');USER_ROWS=d.items||[];filterUsers()}catch(e){alert(e.message)}}
+async function addStudent(){let id=newStudentId.value.trim();if(!/^-?\d+$/.test(id))return alert('Valid Telegram User ID डालें');try{await api('/api/admin/users/create',{method:'POST',body:JSON.stringify({telegram_user_id:id,username:newStudentUsername.value.trim(),first_name:newStudentFirst.value.trim(),last_name:newStudentLast.value.trim()})});newStudentId.value='';newStudentUsername.value='';newStudentFirst.value='';newStudentLast.value='';alert('✅ Student added और access enabled');await loadUsers();refreshAll()}catch(e){alert(e.message)}}
+
 async function userAccess(id,blocked){await api('/api/admin/users/'+encodeURIComponent(id)+'/access',{method:'PATCH',body:JSON.stringify({blocked})});await loadUsers();refreshAll()}
 async function userDetail(id){try{let d=await api('/api/admin/users/'+encodeURIComponent(id)+'/performance');let u=d.user,p=d.paper_stats||{};modalBody.innerHTML=`<h2>👤 ${esc(u.name||'Student')}</h2><p><b>Telegram ID:</b> ${esc(u.id)} ${u.username?' · @'+esc(u.username):''}</p><div class="metricgrid"><div class="metric">Copies<b>${u.submissions}</b></div><div class="metric">Average<b>${u.average_percentage}%</b></div><div class="metric">Obtained<b>${u.obtained}/${u.max}</b></div><div class="metric">Last Seen<b style="font-size:14px">${fmtDate(u.last_seen)}</b></div></div><h3 style="margin-top:22px">GS-wise Performance</h3><div class="metricgrid">${Object.entries(p).map(([k,v])=>`<div class="metric"><b>${esc(k)}</b><span>${v.submissions} copies · ${v.average_percentage}%</span><div class="bar" style="margin-top:8px"><i style="width:${Math.min(100,v.average_percentage)}%"></i></div></div>`).join('')}</div><h3 style="margin-top:22px">Recent Copies</h3><div class="tablewrap"><table class="table"><thead><tr><th>Date</th><th>Paper</th><th>Marks</th><th>Language</th><th>PDF</th></tr></thead><tbody>${(d.recent||[]).map(x=>`<tr><td>${fmtDate(x.created_at)}</td><td>${esc(x.paper)}</td><td><b>${x.obtained}/${x.max}</b></td><td>${esc(x.language||'-')}</td><td><button class="btn blue" onclick="pdf('${esc(x.id)}')">Open</button></td></tr>`).join('')}</tbody></table></div>`;modal.classList.remove('hidden')}catch(e){alert(e.message)}}
 function filterSubs(){let q=subSearch.value.toLowerCase();renderSubs(SUB_ROWS.filter(x=>(x.user_id+' '+(x.filename||'')).toLowerCase().includes(q)))}
 function renderSubs(rows){subsBody.innerHTML=rows.map(x=>`<tr><td>${fmtDate(x.created_at)}</td><td>${esc(x.user_id)}</td><td><b>${esc(x.paper)}</b></td><td><b>${esc(x.obtained)}/${esc(x.max)}</b></td><td>${esc(x.language||'-')}</td><td>${esc(x.filename||'-')}</td><td><button class="btn blue" onclick="submissionDetail('${esc(x.id)}')">Details</button> <button class="btn ghost" onclick="pdf('${esc(x.id)}')">PDF</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">कोई evaluation नहीं मिला।</td></tr>'}
 
 async function loadGroups(){try{let d=await api('/api/admin/groups');groupsBody.innerHTML=(d.items||[]).map(x=>`<tr><td><b>${esc(x.title||'Untitled')}</b><br><small>${esc(x.id)}</small></td><td>${esc(x.type||'-')}</td><td>${x.blocked?'<span class="pill bad">Blocked</span>':x.allowed?'<span class="pill ok">Allowed</span>':'<span class="pill">Not Allowed</span>'}</td><td>-</td><td><button class="btn ${x.allowed?'red':'green'}" onclick="groupAccess('${esc(x.id)}',${x.allowed?'false':'true'})">${x.allowed?'Remove Access':'Allow Access'}</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty">अभी कोई Telegram group registered नहीं है।</td></tr>'}catch(e){alert(e.message)}}
+async function addGroup(){let id=newGroupId.value.trim();if(!/^-?\d+$/.test(id))return alert('Valid Telegram Group ID डालें');try{await api('/api/admin/groups/create',{method:'POST',body:JSON.stringify({telegram_group_id:id,title:newGroupTitle.value.trim(),group_type:newGroupType.value})});newGroupId.value='';newGroupTitle.value='';alert('✅ Group added और access enabled');await loadGroups();refreshAll()}catch(e){alert(e.message)}}
+
 async function groupAccess(id,allowed){await api('/api/admin/groups/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({allowed})});loadGroups()}
 async function loadSubmissions(){try{let paper=subPaper.value;let d=await api('/api/admin/submissions?limit=300'+(paper?'&paper='+encodeURIComponent(paper):''));SUB_ROWS=d.items||[];filterSubs()}catch(e){alert(e.message)}}
 async function submissionDetail(id){try{let d=await api('/api/admin/submissions/'+encodeURIComponent(id));let s=d.submission;modalBody.innerHTML=`<h2>📄 ${esc(s.paper)} Evaluation</h2><p><b>User:</b> ${esc(s.user)} · <b>Language:</b> ${esc(s.language||'-')} · <b>Marks:</b> ${esc(s.obtained)}/${esc(s.max)}</p><p><b>Original:</b> ${esc(s.original_filename||'-')}<br><b>Evaluated:</b> ${esc(s.filename||'-')}</p><div class="card"><b>Overall Feedback</b><p>${esc(s.feedback||'-')}</p></div><h3>Question-wise</h3><div class="tablewrap"><table class="table"><thead><tr><th>Q</th><th>Pages</th><th>Marks</th><th>Demand</th><th>Skipped</th><th>Comment</th></tr></thead><tbody>${(d.questions||[]).map(q=>`<tr><td>${q.number}</td><td>${q.start_page}-${q.end_page}</td><td>${q.obtained}/${q.max}</td><td>${esc((q.fulfilled||[]).join(' • '))}</td><td>${esc((q.skipped||[]).join(' • ')||'—')}</td><td>${esc(q.comment||'')}</td></tr>`).join('')}</tbody></table></div><h3>Examiner Comments / Annotations</h3><div>${(d.comments||[]).map(c=>`<div style="padding:8px;border-bottom:1px solid #eee"><b>Page ${c.page}</b> · ${esc(c.color||'red')}<br>${esc(c.comment)}</div>`).join('')||'<div class="empty">No comments</div>'}</div><div style="margin-top:15px"><button class="btn blue" onclick="pdf('${esc(id)}')">Open Evaluated PDF</button></div>`;modal.classList.remove('hidden')}catch(e){alert(e.message)}}
 async function pdf(id){let r=await fetch('/api/admin/submissions/'+encodeURIComponent(id)+'/pdf');if(!r.ok)return alert('PDF access denied');let b=await r.blob(),u=URL.createObjectURL(b);window.open(u,'_blank')}
 async function loadContent(){try{let d=await api('/api/admin/content');contentBody.innerHTML=(d.items||[]).map(x=>`<tr><td>${x.id}</td><td>${esc(x.paper)}</td><td>${esc(x.language)}</td><td>${esc(x.question).slice(0,260)}</td><td>${fmtDate(x.created_at)}</td><td><button class="btn red" onclick="deleteContent(${x.id})">Delete</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">अभी कोई daily content नहीं है।</td></tr>'}catch(e){alert(e.message)}}
 function downloadContentPdf(){window.open('/api/admin/content/pdf','_blank')}
-async function saveContent(){let question=q.value.trim();if(!question)return alert('Question लिखें');await api('/api/admin/content',{method:'POST',body:JSON.stringify({paper:paper.value,language:lang.value,question,model_answer:a.value.trim()})});q.value='';a.value='';await loadContent()}
+function addQuestionRow(data={}){const box=document.getElementById('bulkQuestions');const row=document.createElement('div');row.className='card bulk-q-row';row.style.cssText='margin-top:10px;border:1px solid #dbe2ea';row.innerHTML=`<div class="toolbar" style="margin-bottom:8px"><b>Question #${box.children.length+1}</b><button class="btn red" style="margin-left:auto" onclick="this.closest('.bulk-q-row').remove();renumberRows()">Remove</button></div><div class="formgrid" style="grid-template-columns:140px 140px 1fr"><select class="input bulk-paper"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><select class="input bulk-lang"><option>Hindi</option><option>English</option></select><textarea class="input bulk-question" rows="4" placeholder="Daily Question"></textarea></div><textarea class="input bulk-answer" rows="7" style="width:100%;margin-top:8px" placeholder="Model Answer"></textarea>`;box.appendChild(row);row.querySelector('.bulk-paper').value=data.paper||'GS1';row.querySelector('.bulk-lang').value=data.language||'Hindi';row.querySelector('.bulk-question').value=data.question||'';row.querySelector('.bulk-answer').value=data.model_answer||'';renumberRows()}
+function renumberRows(){document.querySelectorAll('.bulk-q-row').forEach((r,i)=>{const b=r.querySelector('b');if(b)b.textContent='Question #'+(i+1)})}
+function clearQuestionRows(){document.getElementById('bulkQuestions').innerHTML='';addQuestionRow()}
+async function saveBulkContent(){const rows=[...document.querySelectorAll('.bulk-q-row')];if(!rows.length)return alert('कम से कम एक question जोड़ें');const items=rows.map(r=>({paper:r.querySelector('.bulk-paper').value,language:r.querySelector('.bulk-lang').value,question:r.querySelector('.bulk-question').value.trim(),model_answer:r.querySelector('.bulk-answer').value.trim()}));const invalid=items.findIndex(x=>!x.question);if(invalid>=0)return alert(`Question #${invalid+1} में question लिखें`);try{const d=await api('/api/admin/content/bulk',{method:'POST',body:JSON.stringify({items})});alert(`✅ ${d.inserted} Daily Questions save हुए${d.skipped?`\n⚠️ ${d.skipped} rows skipped`:''}`);clearQuestionRows();await loadContent()}catch(e){alert(e.message)}}
 async function deleteContent(id){if(!confirm('यह content delete करना है?'))return;await api('/api/admin/content/'+id,{method:'DELETE'});loadContent()}
 async function loadAdmins(){try{let d=await api('/api/admin/admins');adminsBody.innerHTML=(d.items||[]).map(x=>`<tr><td>${esc(x.id)}</td><td><span class="pill role">${esc(x.role)}</span></td><td>${x.active?'<span class="pill ok">Active</span>':'<span class="pill bad">Disabled</span>'}</td><td>${fmtDate(x.last_login)}</td><td>${x.role==='super_admin'?'—':`<button class="btn red" onclick="removeAdmin('${esc(x.id)}')">Remove</button>`}</td></tr>`).join('')}catch(e){alert(e.message)}}
 async function addAdmin(){let id=adminId.value.trim();if(!/^\d+$/.test(id))return alert('Numeric Telegram User ID डालें');await api('/api/admin/admins',{method:'POST',body:JSON.stringify({telegram_user_id:id})});adminId.value='';loadAdmins()}
@@ -4216,6 +4224,33 @@ def admin_users(request: Request, limit: int=500):
         return {"ok":True,"items":items}
     finally:s.close()
 
+@app.post("/api/admin/users/create")
+async def admin_user_create(request: Request):
+    if not admin_authorized(request):
+        return admin_denied()
+    body = await request.json()
+    uid = str(body.get("telegram_user_id", "")).strip()
+    username = str(body.get("username", "")).strip().lstrip("@") or None
+    first_name = str(body.get("first_name", "")).strip() or None
+    last_name = str(body.get("last_name", "")).strip() or None
+    if not re.fullmatch(r"-?\d+", uid):
+        return {"ok": False, "error": "Valid Telegram User ID required"}
+    s = SessionLocal()
+    try:
+        now = _utcnow(); u = s.get(DBUser, uid)
+        if u is None:
+            u = DBUser(telegram_user_id=uid, username=username, first_name=first_name, last_name=last_name, is_allowed=True, is_blocked=False, created_at=now, last_seen_at=now)
+            s.add(u)
+        else:
+            if username is not None: u.username=username
+            if first_name is not None: u.first_name=first_name
+            if last_name is not None: u.last_name=last_name
+            u.is_allowed=True; u.is_blocked=False; u.last_seen_at=now
+        s.commit(); return {"ok":True,"id":uid,"message":"Student added and access enabled"}
+    except Exception as e:
+        s.rollback(); return {"ok":False,"error":str(e)[:200]}
+    finally: s.close()
+
 @app.patch("/api/admin/users/{user_id}/access")
 async def admin_user_access(user_id: str, request: Request):
     if not admin_authorized(request): return admin_denied()
@@ -4235,6 +4270,25 @@ def admin_groups(request: Request):
     try:
         rows=s.query(DBGroup).order_by(desc(DBGroup.last_seen_at)).limit(500).all();return {"ok":True,"items":[{"id":g.telegram_group_id,"title":g.title,"type":g.group_type,"allowed":g.is_allowed,"blocked":g.is_blocked} for g in rows]}
     finally:s.close()
+
+@app.post("/api/admin/groups/create")
+async def admin_group_create(request: Request):
+    if not admin_authorized(request):
+        return admin_denied()
+    body=await request.json(); gid=str(body.get("telegram_group_id","")).strip(); title=str(body.get("title","")).strip() or None; group_type=str(body.get("group_type","supergroup")).strip() or "supergroup"
+    if not re.fullmatch(r"-?\d+",gid): return {"ok":False,"error":"Valid Telegram Group ID required"}
+    s=SessionLocal()
+    try:
+        now=_utcnow(); g=s.get(DBGroup,gid)
+        if g is None:
+            g=DBGroup(telegram_group_id=gid,title=title,group_type=group_type,is_allowed=True,is_blocked=False,created_at=now,last_seen_at=now); s.add(g)
+        else:
+            if title is not None: g.title=title
+            g.group_type=group_type; g.is_allowed=True; g.is_blocked=False; g.last_seen_at=now
+        s.commit(); return {"ok":True,"id":gid,"message":"Group added and access enabled"}
+    except Exception as e:
+        s.rollback(); return {"ok":False,"error":str(e)[:200]}
+    finally: s.close()
 
 @app.patch("/api/admin/groups/{group_id}")
 async def admin_group_update(group_id: str, request: Request):
@@ -4356,11 +4410,25 @@ def admin_content_pdf(request: Request, language: str = ""):
     return response
 
 
+@app.post("/api/admin/content/bulk")
+async def admin_content_bulk(request: Request):
+    if not admin_authorized(request): return admin_denied()
+    ensure_admin_content_table(); body=await request.json(); items=body.get("items",[])
+    if not isinstance(items,list) or not items: return {"ok":False,"error":"At least one question is required"}
+    now=_utcnow(); inserted=0; skipped=0; errors=[]
+    with engine.begin() as conn:
+        for idx,item in enumerate(items,1):
+            paper=str(item.get("paper","GS1")).upper().strip(); language=str(item.get("language","Hindi")).strip() or "Hindi"; question=str(item.get("question","")).strip(); answer=str(item.get("model_answer","")).strip()
+            if paper not in {"GS1","GS2","GS3","GS4","GS5","GS6"} or not question:
+                skipped+=1; errors.append(f"Row {idx}: paper and question are required"); continue
+            conn.exec_driver_sql("""INSERT INTO daily_content(paper,language,question,model_answer,is_active,created_at,updated_at) VALUES (%s,%s,%s,%s,TRUE,%s,%s)""",(paper,language,question,answer,now,now)); inserted+=1
+    return {"ok":True,"inserted":inserted,"skipped":skipped,"errors":errors[:20],"message":f"{inserted} Daily Questions added"}
+
 @app.get("/api/admin/content")
 def admin_content(request: Request):
     if not admin_authorized(request):return admin_denied()
     ensure_admin_content_table()
-    with engine.connect() as conn: rows=conn.exec_driver_sql("SELECT id,paper,language,question,model_answer,created_at FROM daily_content ORDER BY id DESC LIMIT 100").mappings().all()
+    with engine.connect() as conn: rows=conn.exec_driver_sql("SELECT id,paper,language,question,model_answer,created_at FROM daily_content ORDER BY id DESC").mappings().all()
     return {"ok":True,"items":[dict(r) for r in rows]}
 
 @app.post("/api/admin/content")
