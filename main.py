@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import requests
 from pathlib import Path
 
-from fastapi import FastAPI, Request, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, Request, UploadFile, File, BackgroundTasks, Form
 import telebot
 from PIL import Image, ImageDraw, ImageFont
 import pymupdf as fitz
@@ -709,10 +709,37 @@ def image_pages_from_pdf(pdf):
 # ============================================================
 # GEMINI PROMPT
 # ============================================================
+# ============================================================
+# DAILY MODEL ANSWER REFERENCE
+# ============================================================
+
+def get_daily_model_answer_reference(paper):
+    if not DB_ENABLED or engine is None:
+        return ""
+    try:
+        ensure_admin_content_table()
+        with engine.connect() as conn:
+            rows = conn.exec_driver_sql(
+                "SELECT question,model_answer,language FROM daily_content "
+                "WHERE is_active=TRUE AND paper=%s ORDER BY id DESC LIMIT 20",
+                (paper.upper(),)
+            ).mappings().all()
+        parts = []
+        for r in rows:
+            parts.append(
+                f"QUESTION ({r.get('language','')}):\n{r.get('question','')}\n"
+                f"MODEL ANSWER:\n{r.get('model_answer','')}"
+            )
+        return "\n\n---\n\n".join(parts)
+    except Exception as e:
+        print("DAILY MODEL ANSWER REFERENCE ERROR:", e)
+        return ""
+
 
 def build_prompt(
     paper,
-    total_pages
+    total_pages,
+    model_answer_reference=""
 ):
 
     return f"""
@@ -739,6 +766,21 @@ IMPORTANT: LANGUAGE RULE
 
 UI language या Telegram language का answer-copy evaluation language
 पर कोई प्रभाव नहीं होना चाहिए।
+
+============================================================
+DAILY MODEL ANSWER BENCHMARK
+============================================================
+
+यदि नीचे PRANA PCS का Daily Question / Model Answer उपलब्ध है और
+विद्यार्थी की copy उसी question का उत्तर देती है, तो उसे benchmark की
+तरह इस्तेमाल करें। Model Answer को copy न करें और केवल उसके शब्दों की
+नकल के आधार पर marks न दें। Question demand, correctness, structure,
+analysis, examples, data, value addition और omissions को independently
+check करें। Model Answer से छूटे हुए महत्वपूर्ण dimensions identify
+करने में सहायता लें।
+
+REFERENCE MODEL ANSWERS:
+{model_answer_reference}
 
 ============================================================
 MARKING
@@ -1132,7 +1174,8 @@ def call_gemini(
         {
             "text": build_prompt(
                 paper,
-                len(images)
+                len(images),
+                get_daily_model_answer_reference(paper)
             )
         }
     )
@@ -4067,7 +4110,7 @@ button,input,select,textarea{font:inherit}.top{position:sticky;top:0;z-index:20;
 <section id="users" class="tabsec hidden"><div class="sectionhead"><div><h2>👥 Students / Users</h2><p style="color:#667085;margin-top:-8px">Access, submissions और individual performance manage करें।</p></div><div class="toolbar"><input id="userSearch" class="input search" placeholder="Telegram ID / name / username" oninput="filterUsers()"><button class="btn ghost" onclick="loadUsers()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>User</th><th>Status</th><th>Copies</th><th>Average</th><th>Last Seen</th><th>Access</th><th>Performance</th></tr></thead><tbody id="usersBody"></tbody></table></div></section>
 <section id="groups" class="tabsec hidden"><div class="sectionhead"><div><h2>👥 Telegram Groups</h2><p style="color:#667085;margin-top:-8px">पूरे Telegram group को access दे या हटाएँ।</p></div><button class="btn ghost" onclick="loadGroups()">↻ Refresh</button></div><div class="tablewrap"><table class="table"><thead><tr><th>Group</th><th>Type</th><th>Status</th><th>Last Seen</th><th>Access</th></tr></thead><tbody id="groupsBody"></tbody></table></div></section>
 <section id="submissions" class="tabsec hidden"><div class="sectionhead"><div><h2>📄 Evaluated Copies</h2><p style="color:#667085;margin-top:-8px">हर evaluation की details, marks और PDF.</p></div><div class="toolbar"><select id="subPaper" class="input" onchange="loadSubmissions()"><option value="">All Papers</option><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><input id="subSearch" class="input search" placeholder="User ID / filename" oninput="filterSubs()"><button class="btn ghost" onclick="loadSubmissions()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>Date</th><th>User</th><th>Paper</th><th>Marks</th><th>Language</th><th>Filename</th><th>Actions</th></tr></thead><tbody id="subsBody"></tbody></table></div></section>
-<section id="content" class="tabsec hidden"><div class="card"><h2>📝 Daily Question + Model Answer</h2><div class="formgrid"><select id="paper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><select id="lang" class="input"><option>Hindi</option><option>English</option></select><textarea id="q" class="input" rows="5" placeholder="Daily Question"></textarea><textarea id="a" class="input" rows="5" placeholder="Model Answer"></textarea><button class="btn green" onclick="saveContent()">Save</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Created</th><th>Action</th></tr></thead><tbody id="contentBody"></tbody></table></div></section>
+<section id="content" class="tabsec hidden"><div class="card"><h2>📝 Daily Question + Model Answer</h2><div style="margin-bottom:10px"><button class="btn blue" onclick="downloadContentPdf()">📥 Download All as Branded PDF</button></div><div class="formgrid"><select id="paper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><select id="lang" class="input"><option>Hindi</option><option>English</option></select><textarea id="q" class="input" rows="5" placeholder="Daily Question"></textarea><textarea id="a" class="input" rows="5" placeholder="Model Answer"></textarea><button class="btn green" onclick="saveContent()">Save</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Created</th><th>Action</th></tr></thead><tbody id="contentBody"></tbody></table></div></section>
 <section id="admins" class="tabsec hidden"><div class="card"><h2>👑 Admin Management</h2><p>केवल Super Admin दूसरे Admin accounts जोड़/हटा सकता है।</p><div class="toolbar"><input id="adminId" class="input" placeholder="Telegram User ID"><button class="btn blue" onclick="addAdmin()">➕ Add Admin</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>Telegram ID</th><th>Role</th><th>Status</th><th>Last Login</th><th>Action</th></tr></thead><tbody id="adminsBody"></tbody></table></div></section>
 </div></div>
 <div id="modal" class="modal hidden" onclick="if(event.target===this)closeModal()"><div class="modalbox"><button class="btn gray close" onclick="closeModal()">Close</button><div id="modalBody"></div></div></div>
@@ -4097,6 +4140,7 @@ async function loadSubmissions(){try{let paper=subPaper.value;let d=await api('/
 async function submissionDetail(id){try{let d=await api('/api/admin/submissions/'+encodeURIComponent(id));let s=d.submission;modalBody.innerHTML=`<h2>📄 ${esc(s.paper)} Evaluation</h2><p><b>User:</b> ${esc(s.user)} · <b>Language:</b> ${esc(s.language||'-')} · <b>Marks:</b> ${esc(s.obtained)}/${esc(s.max)}</p><p><b>Original:</b> ${esc(s.original_filename||'-')}<br><b>Evaluated:</b> ${esc(s.filename||'-')}</p><div class="card"><b>Overall Feedback</b><p>${esc(s.feedback||'-')}</p></div><h3>Question-wise</h3><div class="tablewrap"><table class="table"><thead><tr><th>Q</th><th>Pages</th><th>Marks</th><th>Demand</th><th>Skipped</th><th>Comment</th></tr></thead><tbody>${(d.questions||[]).map(q=>`<tr><td>${q.number}</td><td>${q.start_page}-${q.end_page}</td><td>${q.obtained}/${q.max}</td><td>${esc((q.fulfilled||[]).join(' • '))}</td><td>${esc((q.skipped||[]).join(' • ')||'—')}</td><td>${esc(q.comment||'')}</td></tr>`).join('')}</tbody></table></div><h3>Examiner Comments / Annotations</h3><div>${(d.comments||[]).map(c=>`<div style="padding:8px;border-bottom:1px solid #eee"><b>Page ${c.page}</b> · ${esc(c.color||'red')}<br>${esc(c.comment)}</div>`).join('')||'<div class="empty">No comments</div>'}</div><div style="margin-top:15px"><button class="btn blue" onclick="pdf('${esc(id)}')">Open Evaluated PDF</button></div>`;modal.classList.remove('hidden')}catch(e){alert(e.message)}}
 async function pdf(id){let r=await fetch('/api/admin/submissions/'+encodeURIComponent(id)+'/pdf');if(!r.ok)return alert('PDF access denied');let b=await r.blob(),u=URL.createObjectURL(b);window.open(u,'_blank')}
 async function loadContent(){try{let d=await api('/api/admin/content');contentBody.innerHTML=(d.items||[]).map(x=>`<tr><td>${x.id}</td><td>${esc(x.paper)}</td><td>${esc(x.language)}</td><td>${esc(x.question).slice(0,260)}</td><td>${fmtDate(x.created_at)}</td><td><button class="btn red" onclick="deleteContent(${x.id})">Delete</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">अभी कोई daily content नहीं है।</td></tr>'}catch(e){alert(e.message)}}
+function downloadContentPdf(){window.open('/api/admin/content/pdf','_blank')}
 async function saveContent(){let question=q.value.trim();if(!question)return alert('Question लिखें');await api('/api/admin/content',{method:'POST',body:JSON.stringify({paper:paper.value,language:lang.value,question,model_answer:a.value.trim()})});q.value='';a.value='';await loadContent()}
 async function deleteContent(id){if(!confirm('यह content delete करना है?'))return;await api('/api/admin/content/'+id,{method:'DELETE'});loadContent()}
 async function loadAdmins(){try{let d=await api('/api/admin/admins');adminsBody.innerHTML=(d.items||[]).map(x=>`<tr><td>${esc(x.id)}</td><td><span class="pill role">${esc(x.role)}</span></td><td>${x.active?'<span class="pill ok">Active</span>':'<span class="pill bad">Disabled</span>'}</td><td>${fmtDate(x.last_login)}</td><td>${x.role==='super_admin'?'—':`<button class="btn red" onclick="removeAdmin('${esc(x.id)}')">Remove</button>`}</td></tr>`).join('')}catch(e){alert(e.message)}}
@@ -4234,6 +4278,83 @@ def admin_submission_pdf(submission_id: str, request: Request):
         if not f or not sub:return Response(content=b"Not found",status_code=404)
         return Response(content=bytes(f.pdf_bytes),media_type="application/pdf",headers={"Content-Disposition":f'inline; filename="{Path(sub.evaluated_filename).name}"'})
     finally:s.close()
+
+@app.get("/api/admin/content/pdf")
+def admin_content_pdf(request: Request, language: str = ""):
+    if not admin_authorized(request):
+        return admin_denied()
+    ensure_admin_content_table()
+    lang = str(language).strip()
+    with engine.connect() as conn:
+        if lang:
+            rows = conn.exec_driver_sql(
+                "SELECT id,paper,language,question,model_answer,created_at "
+                "FROM daily_content WHERE is_active=TRUE AND language=%s ORDER BY id ASC",
+                (lang,)
+            ).mappings().all()
+        else:
+            rows = conn.exec_driver_sql(
+                "SELECT id,paper,language,question,model_answer,created_at "
+                "FROM daily_content WHERE is_active=TRUE ORDER BY id ASC"
+            ).mappings().all()
+
+    if not rows:
+        return app_error("कोई Daily Question उपलब्ध नहीं है।", 404)
+
+    W,H = 1240,1754
+    pages=[]
+    font_big=get_font(34)
+    font_title=get_font(48)
+    font_small=get_font(24)
+    logo_path = str(STATIC_DIR / "branding" / "prana-logo.png")
+    for idx,r in enumerate(rows,1):
+        img=Image.new("RGB",(W,H),"white")
+        draw=ImageDraw.Draw(img)
+        if os.path.exists(logo_path):
+            try:
+                logo=Image.open(logo_path).convert("RGBA")
+                logo.thumbnail((110,110))
+                img.paste(logo,(70,55),logo)
+            except Exception:
+                pass
+        draw.text((210,65),"PRANA PCS",font=font_title,fill=(20,20,20))
+        draw.text((210,125),"LET'S PRANA • DAILY QUESTION + MODEL ANSWER",font=font_small,fill=(110,110,110))
+        draw.text((70,190),f"{idx}. {r['paper']} • {r['language']}",font=font_big,fill=(20,20,20))
+        y=260
+        # Simple word wrapping for the branded PDF.
+        def wrap_text(text, width_chars=52):
+            words=str(text or "").split()
+            lines=[]; cur=""
+            for w in words:
+                if len(cur)+len(w)+1 > width_chars:
+                    lines.append(cur); cur=w
+                else:
+                    cur=(cur+" "+w).strip()
+            if cur: lines.append(cur)
+            return "\n".join(lines)
+        draw.text((70,y),"QUESTION",font=font_small,fill=(120,90,0)); y+=42
+        draw.multiline_text((70,y),wrap_text(r["question"],55),font=font_big,fill=(25,25,25),spacing=12)
+        y += 360
+        draw.text((70,y),"MODEL ANSWER",font=font_small,fill=(120,90,0)); y+=42
+        draw.multiline_text((70,y),wrap_text(r["model_answer"],55),font=font_big,fill=(25,25,25),spacing=12)
+        draw.text((70,H-70),f"PRANA PCS • Page {idx}/{len(rows)}",font=font_small,fill=(130,130,130))
+        pages.append(img.convert("RGB"))
+
+    out=io.BytesIO()
+    doc=fitz.open()
+    try:
+        for img in pages:
+            b=io.BytesIO(); img.save(b,format="PNG")
+            page=doc.new_page(width=W*72/150,height=H*72/150)
+            page.insert_image(page.rect,stream=b.getvalue())
+        doc.save(out,garbage=4,deflate=True)
+    finally:
+        doc.close()
+
+    response=Response(content=out.getvalue(),media_type="application/pdf")
+    response.headers["Content-Disposition"]='attachment; filename="PRANA_PCS_Daily_Questions_Model_Answers.pdf"'
+    return response
+
 
 @app.get("/api/admin/content")
 def admin_content(request: Request):
@@ -4568,6 +4689,124 @@ async def app_auth(request: Request):
     return response
 
 
+@app.post("/api/app/admin-auth")
+async def app_admin_auth(request: Request):
+    body = await request.json()
+    init_data = str(body.get("initData", ""))
+    user = telegram_webapp_validate(init_data)
+    if not user:
+        return app_error("Telegram authentication invalid or expired.", 401)
+
+    uid = str(user["id"])
+    role = None
+    if SUPER_ADMIN_TELEGRAM_ID and uid == SUPER_ADMIN_TELEGRAM_ID:
+        role = "super_admin"
+    elif uid in ADMIN_TELEGRAM_IDS:
+        role = "admin"
+    elif DB_ENABLED and SessionLocal is not None:
+        s = SessionLocal()
+        try:
+            row = s.execute(
+                __import__("sqlalchemy").text(
+                    "SELECT role,is_active FROM admin_users WHERE telegram_user_id=:uid"
+                ), {"uid": uid}
+            ).mappings().first()
+            if row and row["is_active"]:
+                role = str(row["role"])
+        finally:
+            s.close()
+    if not role:
+        return app_error("यह Telegram account authorized admin नहीं है।", 403)
+
+    response = Response(
+        content=json.dumps({"ok": True, "role": role, "telegram_user_id": uid}),
+        media_type="application/json"
+    )
+    response.set_cookie(
+        ADMIN_SESSION_COOKIE,
+        make_admin_session(uid, role),
+        max_age=ADMIN_SESSION_MAX_AGE,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/"
+    )
+    return response
+
+
+@app.post("/api/app/send-to-telegram")
+async def app_send_to_telegram(
+    request: Request,
+    initData: str = Form(""),
+    files: list[UploadFile] = File(...)
+):
+    user = telegram_webapp_validate(initData)
+    if not user:
+        return app_error("Telegram authentication invalid or expired.", 401)
+    if not bot:
+        return app_error("Telegram bot is not configured.", 500)
+    if not files:
+        return app_error("कोई file upload नहीं हुई।", 400)
+
+    try:
+        pdf_files = []
+        image_files = []
+        for upload in files:
+            filename = Path(upload.filename or "submission").name
+            data = await upload.read()
+            if not data:
+                continue
+            if len(data) > 20 * 1024 * 1024:
+                return app_error("हर file 20 MB से छोटी होनी चाहिए।", 400)
+            ext = Path(filename).suffix.lower()
+            ctype = (upload.content_type or "").lower()
+            if ext == ".pdf" or ctype == "application/pdf":
+                pdf_files.append((filename, data))
+            elif ext in (".jpg",".jpeg",".png",".webp",".bmp") or ctype.startswith("image/"):
+                image_files.append((filename, data))
+            else:
+                return app_error(f"Unsupported file type: {filename}", 400)
+
+        if pdf_files and image_files:
+            return app_error("एक बार में PDF या images में से एक प्रकार भेजें।", 400)
+        if len(pdf_files) > 1:
+            return app_error("एक बार में केवल एक PDF भेजें।", 400)
+
+        if pdf_files:
+            output_name, pdf_bytes = pdf_files[0]
+            if not output_name.lower().endswith(".pdf"):
+                output_name = Path(output_name).stem + ".pdf"
+        elif image_files:
+            doc = fitz.open()
+            try:
+                for filename, data in image_files:
+                    img = Image.open(io.BytesIO(data)).convert("RGB")
+                    tmp = io.BytesIO()
+                    img.save(tmp, format="JPEG", quality=94)
+                    page = doc.new_page(width=img.width, height=img.height)
+                    page.insert_image(page.rect, stream=tmp.getvalue())
+                out = io.BytesIO()
+                doc.save(out, garbage=4, deflate=True)
+                pdf_bytes = out.getvalue()
+            finally:
+                doc.close()
+            output_name = Path(image_files[0][0]).stem + ".pdf"
+        else:
+            return app_error("Valid PDF या image file नहीं मिली।", 400)
+
+        bio = io.BytesIO(pdf_bytes)
+        bio.name = output_name
+        bot.send_document(
+            str(user["id"]),
+            bio,
+            caption=f"📄 {output_name}\nPRANA PCS AI Evaluator"
+        )
+        return {"ok": True, "filename": output_name, "message": "PDF Telegram chat में भेज दी गई है।"}
+    except Exception as e:
+        print("SEND PDF TELEGRAM ERROR:", e)
+        return app_error("Telegram पर PDF भेजने में समस्या हुई।", 500)
+
+
 @app.get("/api/app/me")
 def app_me(request: Request):
     uid = require_app_user(request)
@@ -4624,11 +4863,13 @@ def app_daily(request: Request, language: str = "Hindi"):
     ensure_admin_content_table()
     lang = "English" if str(language).lower().startswith("en") else "Hindi"
     with engine.connect() as conn:
-        row = conn.exec_driver_sql(
-            "SELECT id,paper,language,question,model_answer,created_at FROM daily_content WHERE is_active=TRUE AND language=%s ORDER BY id DESC LIMIT 1",
+        rows = conn.exec_driver_sql(
+            "SELECT id,paper,language,question,model_answer,created_at "
+            "FROM daily_content WHERE is_active=TRUE AND language=%s "
+            "ORDER BY id DESC",
             (lang,)
-        ).mappings().first()
-    return {"ok": True, "item": dict(row) if row else None}
+        ).mappings().all()
+    return {"ok": True, "items": [dict(r) for r in rows]}
 
 
 @app.get("/api/app/evaluations")
@@ -4730,6 +4971,34 @@ def app_evaluation_pdf(submission_id: str, request: Request):
             media_type="application/pdf",
             headers={"Content-Disposition": f'inline; filename="{Path(sub.evaluated_filename).name}"'}
         )
+    finally:
+        session.close()
+
+
+@app.post("/api/app/evaluations/{submission_id}/send-to-telegram")
+def app_send_evaluated_to_telegram(submission_id: str, request: Request):
+    uid = require_app_user(request)
+    if not uid:
+        return app_error("Unauthorized", 401)
+    if not bot:
+        return app_error("Telegram bot is not configured.", 500)
+    session = SessionLocal()
+    try:
+        sub = session.get(DBSubmission, submission_id)
+        f = session.get(DBSubmissionPDF, submission_id)
+        if not sub or sub.telegram_user_id != uid or not f:
+            return app_error("Evaluation not found", 404)
+        bio = io.BytesIO(bytes(f.pdf_bytes))
+        bio.name = Path(sub.evaluated_filename).name
+        bot.send_document(
+            str(uid),
+            bio,
+            caption=f"📄 {Path(sub.evaluated_filename).name}\nPRANA PCS AI Evaluator"
+        )
+        return {"ok": True, "message": "Evaluated copy Telegram chat में भेज दी गई है।"}
+    except Exception as e:
+        print("SEND EVALUATED PDF ERROR:", e)
+        return app_error("Evaluated copy भेजने में समस्या हुई।", 500)
     finally:
         session.close()
 
