@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pyTelegramBotAPI
+requests
+Pillow
+PyMuPDF
+SQLAlchemy
+psycopg2-binary
+python-multipart
