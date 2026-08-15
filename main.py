@@ -595,10 +595,8 @@ def save_submission(
 
 
 def ask_paper(message):
-
     bot.reply_to(
         message,
-
         "📄 <b>Copy Received.</b>\n\n"
         "Before evaluation, send the <b>Paper Name</b>:\n\n"
         "• GS 1\n• GS 2\n• GS 3\n• GS 4\n• GS 5\n• GS 6\n\n"
@@ -1730,7 +1728,7 @@ def wrap_text(
 def make_comment_badge(
     text,
     width=1600,
-    font_size=92,
+    font_size=94,
     color="red"
 ):
 
@@ -1871,8 +1869,8 @@ def make_score_badge(
         width=14
     )
 
-    title_font = font(62)
-    score_font = font(96)
+    title_font = font(64)
+    score_font = font(98)
 
     title = "PRANA AI EVALUATOR"
 
@@ -1942,7 +1940,7 @@ def make_marks_badge(
     total
 ):
 
-    fnt = font(48)
+    fnt = font(50)
 
     text = (
         f"Q{question_number}   "
@@ -3616,15 +3614,24 @@ if bot:
 
 
 def telegram_chat_access_allowed(message):
-    """Chat-side access gate: admin-granted student OR admin-granted group.
-    New users/groups are always pending until explicitly allowed in Admin Panel.
+    """Telegram chat access gate.
+
+    Rules:
+    1. Explicitly allowed student -> allowed.
+    2. Blocked student -> denied everywhere.
+    3. In an authorized group -> allowed if the group itself is allowed.
+    4. In a private chat -> allowed when the student belongs to ANY admin-allowed group.
+       Membership is verified live with Telegram getChatMember.
+    5. Everyone else -> Access Denied.
     """
     if not DB_ENABLED or SessionLocal is None:
         return False, "database_unavailable"
+
     uid = str(getattr(getattr(message, "from_user", None), "id", ""))
     chat = getattr(message, "chat", None)
     chat_id = str(getattr(chat, "id", ""))
     chat_type = getattr(chat, "type", None)
+
     session = SessionLocal()
     try:
         user = session.get(DBUser, uid) if uid else None
@@ -3632,13 +3639,43 @@ def telegram_chat_access_allowed(message):
             return False, "blocked"
         if user and user.is_allowed:
             return True, "user"
+
+        # If this message is already inside an authorized group,
+        # the group grant is sufficient for evaluation.
         if chat_type in ("group", "supergroup") and chat_id:
             group = session.get(DBGroup, chat_id)
             if group and group.is_allowed and not group.is_blocked:
                 return True, "group"
-        return False, "not_authorized"
+
+        allowed_groups = session.query(DBGroup).filter(
+            DBGroup.is_allowed == True,
+            DBGroup.is_blocked == False
+        ).all()
+    except Exception as e:
+        print("TELEGRAM ACCESS DB ERROR:", e)
+        return False, "database_error"
     finally:
         session.close()
+
+    # For a private chat, verify the user's live membership in any allowed group.
+    if not bot or not uid:
+        return False, "not_authorized"
+
+    for group in allowed_groups:
+        try:
+            member = bot.get_chat_member(int(group.telegram_group_id), int(uid))
+            status = str(getattr(member, "status", ""))
+            is_member = bool(getattr(member, "is_member", False))
+            if status in ("creator", "administrator", "member") or (status == "restricted" and is_member):
+                return True, "group"
+        except Exception as e:
+            print(f"TELEGRAM GROUP MEMBERSHIP CHECK FAILED {group.telegram_group_id}: {str(e)[:160]}")
+            continue
+
+    return False, "not_authorized"
+
+
+if bot:
 
     @bot.message_handler(
         content_types=[
@@ -3654,7 +3691,7 @@ def telegram_chat_access_allowed(message):
 
             allowed, source = telegram_chat_access_allowed(message)
             if not allowed:
-                bot.reply_to(message, "🔒 <b>Access required</b>\n\nYour Telegram account is not enabled by the Admin Panel. Please contact PRANA PCS admin for access.")
+                bot.reply_to(message, "🔒 <b>Access Denied</b>\n\nYour Telegram account or authorized Telegram group does not have access. Please contact PRANA PCS admin.")
                 return
 
             if message.content_type == "document":
@@ -3731,7 +3768,7 @@ def telegram_chat_access_allowed(message):
             bot.reply_to(
                 message,
 
-                "⚠️ Copy could not be received:\n"
+                "⚠️ Copy could not be received.\n"
                 f"{str(e)[:180]}"
             )
 
@@ -3746,7 +3783,7 @@ def telegram_chat_access_allowed(message):
         allowed, source = telegram_chat_access_allowed(message)
         if not allowed:
             PENDING.pop(message.chat.id, None)
-            bot.reply_to(message, "🔒 <b>Access required</b>\n\nYour Telegram account is not enabled by the Admin Panel.")
+            bot.reply_to(message, "🔒 <b>Access Denied</b>\n\nYour Telegram account or authorized Telegram group does not have access.")
             return
 
         chat_id = (
@@ -3900,10 +3937,9 @@ def telegram_chat_access_allowed(message):
                 bot.send_message(
                     chat_id,
 
-                    "⚠️ Evaluation error:\n"
+                    "⚠️ Evaluation error.\n"
                     f"{str(e)[:300]}"
                 )
-
 
 # ============================================================
 # DATABASE HEALTH / STATISTICS API
@@ -4465,7 +4501,7 @@ async def admin_content_bulk(request: Request):
 def build_daily_content_pdf(rows, language):
     """Build a branded, rich-text-friendly Daily Q&A PDF using PyMuPDF Story."""
     today = datetime.now().strftime("%d %B %Y")
-    socials = "Telegram • YouTube\nInstagram • WhatsApp"
+    socials = "Telegram                         Instagram\nYouTube                           WhatsApp"
     story = fitz.Story()
     css = """<style>body{font-family:sans-serif;color:#151922;font-size:11pt}h1{font-size:20pt;margin:0}h2{font-size:14pt;margin-top:18pt;color:#7b1e1e}h3{font-size:11pt;margin-top:12pt}table{border-collapse:collapse;width:100%}td,th{border:0.7pt solid #b8bec8;padding:5pt} .meta{color:#666;font-size:9pt}.footer{font-size:8pt;color:#666;border-top:0.7pt solid #bbb;padding-top:5pt}</style>"""
     parts=[css, f'<h1>PRANA PCS Mains AI</h1><div class="meta">{today} • {language}</div><hr>']
@@ -4475,7 +4511,7 @@ def build_daily_content_pdf(rows, language):
         if not re.search(r'<(p|div|table|ul|ol|strong|em|h[1-6])\b', ans, re.I):
             ans='<p>'+html.escape(ans).replace('\n','<br>')+'</p>'
         parts.append(f'<h2>{i}. {html.escape(str(r["paper"]))} — Daily Question</h2><p><b>Question:</b> {q}</p><h3>Model Answer</h3>{ans}')
-    parts.append(f'<p class="footer">Telegram • YouTube<br>Instagram • WhatsApp<br><b>Paid Contents &amp; Batches- 9984351085</b></p>')
+    parts.append(f'<p class="footer">Telegram                         Instagram<br>YouTube                           WhatsApp<br><b>Paid Batches &amp; Content - 9984351085</b></p>')
     story.write(''.join(parts))
     writer=fitz.Document(); page_no=0
     while True:
@@ -4490,9 +4526,11 @@ def build_daily_content_pdf(rows, language):
         page.insert_text((84,38), "PRANA PCS Mains AI", fontsize=13, fontname="hebo", color=(0.12,0.12,0.12), overlay=True)
         page.insert_text((430,38), today, fontsize=8, fontname="hebo", color=(0.35,0.35,0.35), overlay=True)
         page.draw_line((45,800),(550,800),color=(0.65,0.65,0.65),width=0.6,overlay=True)
-        page.insert_text((45,818),"Telegram • YouTube",fontsize=7.5,color=(0.35,0.35,0.35),overlay=True)
-        page.insert_text((45,830),"Instagram • WhatsApp",fontsize=7.5,color=(0.35,0.35,0.35),overlay=True)
-        page.insert_text((365,824),"Paid Contents & Batches- 9984351085",fontsize=7.5,color=(0.35,0.35,0.35),overlay=True)
+        page.insert_text((45,818),"Telegram",fontsize=7.5,color=(0.35,0.35,0.35),overlay=True)
+        page.insert_text((300,818),"Instagram",fontsize=7.5,color=(0.35,0.35,0.35),overlay=True)
+        page.insert_text((45,830),"YouTube",fontsize=7.5,color=(0.35,0.35,0.35),overlay=True)
+        page.insert_text((300,830),"WhatsApp",fontsize=7.5,color=(0.35,0.35,0.35),overlay=True)
+        page.insert_text((185,841),"Paid Batches & Content - 9984351085",fontsize=7.5,color=(0.35,0.35,0.35),overlay=True)
         if not more: break
     out=io.BytesIO(); writer.save(out,garbage=4,deflate=True); writer.close()
     return out.getvalue()
@@ -5159,11 +5197,13 @@ def app_send_evaluated_to_telegram(submission_id: str, request: Request):
             return app_error("Evaluation not found", 404)
         bio = io.BytesIO(bytes(f.pdf_bytes))
         bio.name = Path(sub.evaluated_filename).name
-        bot.send_document(
-            str(uid),
-            bio,
-            caption=f"📄 {Path(sub.evaluated_filename).name}\nPRANA PCS AI Evaluator"
-        )
+        feedback = str(sub.overall_feedback or "").strip()
+        caption = (
+            f"📄 <b>PRANA PCS AI Evaluated Copy</b>\n"
+            f"<b>Obtained Marks:</b> {float(sub.total_obtained_marks or 0):g} / {float(sub.total_max_marks or 0):g}\n"
+            f"<b>Language • Style • Presentation:</b> {feedback or 'Assessed as part of the evaluation.'}"
+        )[:900]
+        bot.send_document(str(uid), bio, caption=caption)
         return {"ok": True, "message": "Evaluated copy Telegram chat में भेज दी गई है।"}
     except Exception as e:
         print("SEND EVALUATED PDF ERROR:", e)
