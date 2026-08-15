@@ -599,15 +599,10 @@ def ask_paper(message):
     bot.reply_to(
         message,
 
-        "📚 <b>कॉपी प्राप्त हो गई है।</b>\n\n"
-        "मूल्यांकन शुरू करने से पहले <b>Paper Name</b> भेजें:\n\n"
-        "• GS 1\n"
-        "• GS 2\n"
-        "• GS 3\n"
-        "• GS 4\n"
-        "• GS 5\n"
-        "• GS 6\n\n"
-        "उदाहरण: <b>GS 3</b>"
+        "📄 <b>Copy Received.</b>\n\n"
+        "Before evaluation, send the <b>Paper Name</b>:\n\n"
+        "• GS 1\n• GS 2\n• GS 3\n• GS 4\n• GS 5\n• GS 6\n\n"
+        "Example: <b>GS 3</b>"
     )
 
 
@@ -790,6 +785,8 @@ MARKING
 Question की actual demand को पहले identify करें।
 
 केवल topic coverage देखकर marks न दें।
+
+MARK CALIBRATION: सामान्यतः अच्छे लेकिन imperfect उत्तरों को realistic average-to-good range में रखें (लगभग 55–75% of available marks, question difficulty के अनुसार)। 80%+ केवल genuinely exceptional answers को दें। केवल छात्र को अच्छा महसूस कराने के लिए marks inflate न करें और किसी भी उत्तर को default रूप से highest end पर न रखें। बहुत कमजोर/अपूर्ण उत्तर को भी वास्तविक performance के अनुसार कम marks दें।
 
 Check:
 1. प्रश्न के कितने अलग components हैं?
@@ -1031,6 +1028,7 @@ overall_feedback केवल 4-5 छोटी lines की समग्र ट�
 - प्रस्तुतीकरण
 - विश्लेषण/value addition
 - आगे सुधार की आशावादी दिशा
+- भाषा, शैली और प्रस्तुतीकरण (language, style, presentation) का स्पष्ट उल्लेख अनिवार्य है।
 
 का संतुलित उल्लेख हो।
 
@@ -1876,7 +1874,7 @@ def make_score_badge(
     title_font = font(62)
     score_font = font(96)
 
-    title = "प्राप्तांक"
+    title = "PRANA AI EVALUATOR"
 
     bbox = draw.textbbox(
         (0, 0),
@@ -1944,7 +1942,7 @@ def make_marks_badge(
     total
 ):
 
-    fnt = font(46)
+    fnt = font(48)
 
     text = (
         f"Q{question_number}   "
@@ -3338,7 +3336,7 @@ def annotate_pdf(
                         make_comment_badge(
                             text,
                             width=1300,
-                            font_size=72,
+                            font_size=88,
                             color=color
                         )
                     )
@@ -3609,11 +3607,38 @@ if bot:
 
             "🏛️ <b>PRANA PCS AI Mains Evaluator</b>\n\n"
             "<i>LET'S PRANA</i>\n\n"
-            "अपनी answer copy Mini App से evaluate करें।\n"
+            "Evaluate your answer copy using the Mini App.\n"
             "Hindi copy → Hindi evaluation | English copy → English evaluation",
             reply_markup=markup
         )
 
+
+
+
+def telegram_chat_access_allowed(message):
+    """Chat-side access gate: admin-granted student OR admin-granted group.
+    New users/groups are always pending until explicitly allowed in Admin Panel.
+    """
+    if not DB_ENABLED or SessionLocal is None:
+        return False, "database_unavailable"
+    uid = str(getattr(getattr(message, "from_user", None), "id", ""))
+    chat = getattr(message, "chat", None)
+    chat_id = str(getattr(chat, "id", ""))
+    chat_type = getattr(chat, "type", None)
+    session = SessionLocal()
+    try:
+        user = session.get(DBUser, uid) if uid else None
+        if user and user.is_blocked:
+            return False, "blocked"
+        if user and user.is_allowed:
+            return True, "user"
+        if chat_type in ("group", "supergroup") and chat_id:
+            group = session.get(DBGroup, chat_id)
+            if group and group.is_allowed and not group.is_blocked:
+                return True, "group"
+        return False, "not_authorized"
+    finally:
+        session.close()
 
     @bot.message_handler(
         content_types=[
@@ -3626,6 +3651,11 @@ if bot:
         try:
 
             save_user_and_chat(message)
+
+            allowed, source = telegram_chat_access_allowed(message)
+            if not allowed:
+                bot.reply_to(message, "🔒 <b>Access required</b>\n\nYour Telegram account is not enabled by the Admin Panel. Please contact PRANA PCS admin for access.")
+                return
 
             if message.content_type == "document":
 
@@ -3701,7 +3731,7 @@ if bot:
             bot.reply_to(
                 message,
 
-                "⚠️ कॉपी receive नहीं हो सकी:\n"
+                "⚠️ Copy could not be received:\n"
                 f"{str(e)[:180]}"
             )
 
@@ -3712,6 +3742,12 @@ if bot:
         ]
     )
     def paper_reply(message):
+
+        allowed, source = telegram_chat_access_allowed(message)
+        if not allowed:
+            PENDING.pop(message.chat.id, None)
+            bot.reply_to(message, "🔒 <b>Access required</b>\n\nYour Telegram account is not enabled by the Admin Panel.")
+            return
 
         chat_id = (
             message.chat.id
@@ -3729,10 +3765,9 @@ if bot:
             bot.reply_to(
                 message,
 
-                "❗ Paper पहचान नहीं पाया।\n\n"
-                "केवल <b>GS 1</b>, <b>GS 2</b>, "
-                "<b>GS 3</b>, <b>GS 4</b>, "
-                "<b>GS 5</b> या <b>GS 6</b> भेजें।"
+                "❗ Paper not recognized.\n\n"
+                "Please send only <b>GS 1</b>, <b>GS 2</b>, <b>GS 3</b>, "
+                "<b>GS 4</b>, <b>GS 5</b> or <b>GS 6</b>."
             )
 
             return
@@ -3745,8 +3780,7 @@ if bot:
             message,
 
             f"⏳ <b>{paper} selected.</b>\n\n"
-            "अब copy का page-by-page evaluation "
-            "और examiner-style checking शुरू हो रही है..."
+            "Page-by-page evaluation and examiner-style checking has started..."
         )
 
         try:
@@ -3791,11 +3825,12 @@ if bot:
             caption = (
                 f"🏛️ <b>PRANA PCS — {paper} Evaluation</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎯 <b>प्राप्तांक:</b> "
+                f"🎯 <b>Obtained Marks:</b> "
                 f"<code>"
                 f"{result['total_obtained_marks']:g} / "
                 f"{result['total_max_marks']:g}"
                 f"</code>\n\n"
+                f"📝 <b>Language • Style • Presentation:</b> "
                 f"{feedback}"
             )
 
@@ -3853,7 +3888,7 @@ if bot:
 
                 bot.edit_message_text(
                     (
-                        "⚠️ <b>मूल्यांकन में समस्या</b>\n\n"
+                        "⚠️ <b>Evaluation Error</b>\n\n"
                         f"{str(e)[:300]}"
                     ),
                     chat_id=chat_id,
@@ -3865,7 +3900,7 @@ if bot:
                 bot.send_message(
                     chat_id,
 
-                    "⚠️ मूल्यांकन में समस्या:\n"
+                    "⚠️ Evaluation error:\n"
                     f"{str(e)[:300]}"
                 )
 
@@ -3916,6 +3951,7 @@ def api_stats():
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import desc
 import hashlib
+import html
 import hmac
 import time
 import base64
@@ -4100,7 +4136,7 @@ def admin_panel():
 <style>
 :root{--bg:#f4f6fb;--card:#fff;--ink:#172033;--muted:#667085;--line:#e5e7eb;--blue:#2563eb;--green:#059669;--red:#dc2626;--purple:#7c3aed}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-button,input,select,textarea{font:inherit}.top{position:sticky;top:0;z-index:20;background:#111827;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px;box-shadow:0 3px 15px #0002}.brand{font-weight:800}.topright{display:flex;align-items:center;gap:10px;font-size:13px}.wrap{max-width:1500px;margin:auto;padding:18px}.hidden{display:none!important}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 2px 10px #10182808}.login{max-width:480px;margin:80px auto;text-align:center}.tgbox{display:flex;justify-content:center;margin:28px 0}.btn{padding:9px 13px;border:0;border-radius:10px;background:#111827;color:#fff;cursor:pointer;font-weight:650}.btn:hover{filter:brightness(.96)}.green{background:var(--green)}.red{background:var(--red)}.blue{background:var(--blue)}.purple{background:var(--purple)}.gray{background:#667085}.ghost{background:#eef2f7;color:#172033}.tabs{display:flex;gap:8px;overflow:auto;margin:14px 0;padding-bottom:3px}.tab{white-space:nowrap}.tab.active{background:var(--blue)}.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:16px 0}.stat{min-height:92px}.stat small{color:var(--muted)}.stat b{display:block;font-size:27px;margin-top:6px}.section{margin-top:18px}.sectionhead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.tablewrap{overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:14px}.table{width:100%;border-collapse:collapse;min-width:850px}.table th,.table td{padding:10px 12px;border-bottom:1px solid #eee;text-align:left;font-size:13px;vertical-align:top}.table th{background:#f8fafc;position:sticky;top:0}.pill{display:inline-block;padding:4px 8px;border-radius:999px;font-size:11px;background:#eef2ff}.ok{background:#dcfce7;color:#166534}.bad{background:#fee2e2;color:#991b1b}.role{background:#ede9fe;color:#6d28d9}.input{padding:10px;border:1px solid #d0d5dd;border-radius:10px;background:white;outline:none}.input:focus{border-color:#7aa2ff;box-shadow:0 0 0 3px #2563eb15}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.search{min-width:250px}.formgrid{display:grid;grid-template-columns:150px 150px 1fr 1fr auto;gap:8px}.modal{position:fixed;inset:0;background:#11182799;z-index:50;display:flex;align-items:center;justify-content:center;padding:15px}.modalbox{background:#fff;border-radius:18px;max-width:1050px;width:100%;max-height:90vh;overflow:auto;padding:20px}.close{float:right}.metricgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{background:#f8fafc;border:1px solid var(--line);padding:12px;border-radius:12px}.metric b{font-size:22px;display:block}.bar{height:9px;background:#e5e7eb;border-radius:99px;overflow:hidden}.bar i{display:block;height:100%;background:var(--blue)}.empty{padding:30px;text-align:center;color:var(--muted)}pre{white-space:pre-wrap;word-break:break-word;background:#f8fafc;padding:12px;border-radius:10px}.dangertext{color:var(--red)}@media(max-width:1050px){.grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:700px){.wrap{padding:10px}.grid{grid-template-columns:repeat(2,1fr)}.metricgrid{grid-template-columns:repeat(2,1fr)}.formgrid{grid-template-columns:1fr}.search{min-width:0;width:100%}.top{align-items:flex-start}.topright{flex-wrap:wrap;justify-content:flex-end}}
+button,input,select,textarea{font:inherit}.top{position:sticky;top:0;z-index:20;background:#111827;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px;box-shadow:0 3px 15px #0002}.brand{font-weight:800}.topright{display:flex;align-items:center;gap:10px;font-size:13px}.wrap{max-width:1500px;margin:auto;padding:18px}.hidden{display:none!important}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 2px 10px #10182808}.login{max-width:480px;margin:80px auto;text-align:center}.tgbox{display:flex;justify-content:center;margin:28px 0}.btn{padding:9px 13px;border:0;border-radius:10px;background:#111827;color:#fff;cursor:pointer;font-weight:650}.btn:hover{filter:brightness(.96)}.green{background:var(--green)}.red{background:var(--red)}.blue{background:var(--blue)}.purple{background:var(--purple)}.gray{background:#667085}.ghost{background:#eef2f7;color:#172033}.tabs{display:flex;gap:8px;overflow:auto;margin:14px 0;padding-bottom:3px}.tab{white-space:nowrap}.tab.active{background:var(--blue)}.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:16px 0}.stat{min-height:92px}.stat small{color:var(--muted)}.stat b{display:block;font-size:27px;margin-top:6px}.section{margin-top:18px}.sectionhead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.tablewrap{overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:14px}.table{width:100%;border-collapse:collapse;min-width:850px}.table th,.table td{padding:10px 12px;border-bottom:1px solid #eee;text-align:left;font-size:13px;vertical-align:top}.table th{background:#f8fafc;position:sticky;top:0}.pill{display:inline-block;padding:4px 8px;border-radius:999px;font-size:11px;background:#eef2ff}.ok{background:#dcfce7;color:#166534}.bad{background:#fee2e2;color:#991b1b}.role{background:#ede9fe;color:#6d28d9}.input{padding:10px;border:1px solid #d0d5dd;border-radius:10px;background:white;outline:none}.input:focus{border-color:#7aa2ff;box-shadow:0 0 0 3px #2563eb15}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.search{min-width:250px}.formgrid{display:grid;grid-template-columns:150px 150px 1fr 1fr auto;gap:8px}.modal{position:fixed;inset:0;background:#11182799;z-index:50;display:flex;align-items:center;justify-content:center;padding:15px}.modalbox{background:#fff;border-radius:18px;max-width:1050px;width:100%;max-height:90vh;overflow:auto;padding:20px}.close{float:right}.metricgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{background:#f8fafc;border:1px solid var(--line);padding:12px;border-radius:12px}.metric b{font-size:22px;display:block}.bar{height:9px;background:#e5e7eb;border-radius:99px;overflow:hidden}.bar i{display:block;height:100%;background:var(--blue)}.empty{padding:30px;text-align:center;color:var(--muted)}pre{white-space:pre-wrap;word-break:break-word;background:#f8fafc;padding:12px;border-radius:10px}.dangertext{color:var(--red)}.rich-toolbar{display:flex;gap:5px;flex-wrap:wrap}.bulk-answer:empty:before{content:attr(data-placeholder);color:#98a2b3}@media(max-width:1050px){.grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:700px){.wrap{padding:10px}.grid{grid-template-columns:repeat(2,1fr)}.metricgrid{grid-template-columns:repeat(2,1fr)}.formgrid{grid-template-columns:1fr}.search{min-width:0;width:100%}.top{align-items:flex-start}.topright{flex-wrap:wrap;justify-content:flex-end}}
 </style></head><body>
 <div id="login" class="login card"><div style="font-size:40px">🏛️</div><h1>PRANA PCS</h1><h2>Admin Panel</h2><p>अपने Telegram Admin account से login करें।</p>
 <div class="tgbox"><script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-login="__BOT_USERNAME__" data-size="large" data-userpic="false" data-request-access="write" data-onauth="onTelegramAuth(user)"></script></div>
@@ -4108,8 +4144,8 @@ button,input,select,textarea{font:inherit}.top{position:sticky;top:0;z-index:20;
 <div id="app" class="hidden"><div class="top"><div class="brand">🏛️ PRANA PCS — Admin Panel</div><div class="topright"><span id="who"></span><button class="btn gray" onclick="logout()">Logout</button></div></div>
 <div class="wrap"><div class="tabs"><button class="btn tab active" data-tab="dashboard" onclick="tab('dashboard',this)">📊 Dashboard</button><button class="btn tab" data-tab="users" onclick="tab('users',this)">👥 Students</button><button class="btn tab" data-tab="groups" onclick="tab('groups',this)">👥 Groups</button><button class="btn tab" data-tab="submissions" onclick="tab('submissions',this)">📄 Evaluations</button><button class="btn tab" data-tab="content" onclick="tab('content',this)">📝 Daily Content</button><button class="btn tab" data-tab="admins" id="adminTab" onclick="tab('admins',this)">👑 Admins</button></div>
 <section id="dashboard" class="tabsec"><div id="stats" class="grid"></div><div class="card"><div class="sectionhead"><h2>📈 Paper-wise Performance</h2><button class="btn ghost" onclick="refreshAll()">↻ Refresh</button></div><div id="paperStats" class="metricgrid"></div></div><div class="section card"><div class="sectionhead"><h2>🕘 Recent Evaluations</h2></div><div id="recent"></div></div></section>
-<section id="users" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Student</h2><p style="color:#667085;margin-top:-8px">Telegram User ID से student manually जोड़ें और access तुरंत enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1.2fr 1fr 1fr 1fr auto"><input id="newStudentId" class="input" placeholder="Telegram User ID"><input id="newStudentUsername" class="input" placeholder="@username (optional)"><input id="newStudentFirst" class="input" placeholder="First name (optional)"><input id="newStudentLast" class="input" placeholder="Last name (optional)"><button class="btn green" onclick="addStudent()">➕ Add Student</button></div></div><div class="sectionhead"><div><h2>👥 Students / Users</h2><p style="color:#667085;margin-top:-8px">Access, submissions और individual performance manage करें।</p></div><div class="toolbar"><input id="userSearch" class="input search" placeholder="Telegram ID / name / username" oninput="filterUsers()"><button class="btn ghost" onclick="loadUsers()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>User</th><th>Status</th><th>Copies</th><th>Average</th><th>Last Seen</th><th>Access</th><th>Performance</th></tr></thead><tbody id="usersBody"></tbody></table></div></section>
-<section id="groups" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Telegram Group</h2><p style="color:#667085;margin-top:-8px">Group ID से group manually जोड़ें और access enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1.4fr 1fr 1fr auto"><input id="newGroupId" class="input" placeholder="Telegram Group ID (जैसे -100...)"><input id="newGroupTitle" class="input" placeholder="Group title"><select id="newGroupType" class="input"><option value="supergroup">Supergroup</option><option value="group">Group</option></select><button class="btn green" onclick="addGroup()">➕ Add Group</button></div></div><div class="sectionhead"><div><h2>👥 Telegram Groups</h2><p style="color:#667085;margin-top:-8px">पूरे Telegram group को access दे या हटाएँ।</p></div><button class="btn ghost" onclick="loadGroups()">↻ Refresh</button></div><div class="tablewrap"><table class="table"><thead><tr><th>Group</th><th>Type</th><th>Status</th><th>Last Seen</th><th>Access</th></tr></thead><tbody id="groupsBody"></tbody></table></div></section>
+<section id="users" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Student</h2><p style="color:#667085;margin-top:-8px">केवल Telegram User ID डालकर student जोड़ें और access तुरंत enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1fr auto"><input id="newStudentId" class="input" placeholder="Telegram User ID"><button class="btn green" onclick="addStudent()">➕ Add Student</button></div></div><div class="sectionhead"><div><h2>👥 Students / Users</h2><p style="color:#667085;margin-top:-8px">Access, submissions और individual performance manage करें।</p></div><div class="toolbar"><input id="userSearch" class="input search" placeholder="Telegram ID / name / username" oninput="filterUsers()"><button class="btn ghost" onclick="loadUsers()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>User</th><th>Status</th><th>Copies</th><th>Average</th><th>Last Seen</th><th>Access</th><th>Performance</th></tr></thead><tbody id="usersBody"></tbody></table></div></section>
+<section id="groups" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Telegram Group</h2><p style="color:#667085;margin-top:-8px">केवल Telegram Group ID डालकर group जोड़ें और access enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1fr auto"><input id="newGroupId" class="input" placeholder="Telegram Group ID (जैसे -100...)"><button class="btn green" onclick="addGroup()">➕ Add Group</button></div></div><div class="sectionhead"><div><h2>👥 Telegram Groups</h2><p style="color:#667085;margin-top:-8px">पूरे Telegram group को access दे या हटाएँ।</p></div><button class="btn ghost" onclick="loadGroups()">↻ Refresh</button></div><div class="tablewrap"><table class="table"><thead><tr><th>Group</th><th>Type</th><th>Status</th><th>Last Seen</th><th>Access</th></tr></thead><tbody id="groupsBody"></tbody></table></div></section>
 <section id="submissions" class="tabsec hidden"><div class="sectionhead"><div><h2>📄 Evaluated Copies</h2><p style="color:#667085;margin-top:-8px">हर evaluation की details, marks और PDF.</p></div><div class="toolbar"><select id="subPaper" class="input" onchange="loadSubmissions()"><option value="">All Papers</option><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><input id="subSearch" class="input search" placeholder="User ID / filename" oninput="filterSubs()"><button class="btn ghost" onclick="loadSubmissions()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>Date</th><th>User</th><th>Paper</th><th>Marks</th><th>Language</th><th>Filename</th><th>Actions</th></tr></thead><tbody id="subsBody"></tbody></table></div></section>
 <section id="content" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>📝 Daily Questions + Model Answers</h2><p style="color:#667085;margin-top:-8px">एक साथ जितने चाहें questions जोड़ें। कोई daily question limit नहीं।</p></div><div class="toolbar"><button class="btn blue" onclick="downloadContentPdf()">📥 Download All as Branded PDF</button><button class="btn ghost" onclick="addQuestionRow()">➕ Add Question</button></div></div><div id="bulkQuestions"></div><div class="toolbar" style="margin-top:12px"><button class="btn green" onclick="saveBulkContent()">💾 Save All Questions</button><button class="btn ghost" onclick="clearQuestionRows()">Clear Draft</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Created</th><th>Action</th></tr></thead><tbody id="contentBody"></tbody></table></div></section>
 <section id="admins" class="tabsec hidden"><div class="card"><h2>👑 Admin Management</h2><p>केवल Super Admin दूसरे Admin accounts जोड़/हटा सकता है।</p><div class="toolbar"><input id="adminId" class="input" placeholder="Telegram User ID"><button class="btn blue" onclick="addAdmin()">➕ Add Admin</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>Telegram ID</th><th>Role</th><th>Status</th><th>Last Login</th><th>Action</th></tr></thead><tbody id="adminsBody"></tbody></table></div></section>
@@ -4130,7 +4166,7 @@ function renderRecent(rows){recent.innerHTML=rows.slice(0,10).map(x=>`<div style
 function filterUsers(){let q=userSearch.value.toLowerCase();renderUsers(USER_ROWS.filter(x=>(x.id+' '+x.name+' '+(x.username||'')).toLowerCase().includes(q)))}
 function renderUsers(rows){usersBody.innerHTML=rows.map(x=>`<tr><td><b>${esc(x.name||'Unknown')}</b><br><small>${esc(x.username?'@'+x.username:'')}<br>${esc(x.id)}</small></td><td>${x.blocked?'<span class="pill bad">Blocked</span>':x.allowed?'<span class="pill ok">Allowed</span>':'<span class="pill">Pending</span>'}</td><td>${x.submissions}</td><td><b>${x.average_percentage||0}%</b><br><small>${x.obtained||0}/${x.max||0}</small></td><td>${fmtDate(x.last_seen)}</td><td><button class="btn ${x.blocked?'green':'red'}" onclick="userAccess('${esc(x.id)}',${x.blocked?'false':'true'})">${x.blocked?'Allow':'Block'}</button></td><td><button class="btn blue" onclick="userDetail('${esc(x.id)}')">View</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">कोई user नहीं मिला।</td></tr>'}
 async function loadUsers(){try{let d=await api('/api/admin/users?limit=500');USER_ROWS=d.items||[];filterUsers()}catch(e){alert(e.message)}}
-async function addStudent(){let id=newStudentId.value.trim();if(!/^-?\d+$/.test(id))return alert('Valid Telegram User ID डालें');try{await api('/api/admin/users/create',{method:'POST',body:JSON.stringify({telegram_user_id:id,username:newStudentUsername.value.trim(),first_name:newStudentFirst.value.trim(),last_name:newStudentLast.value.trim()})});newStudentId.value='';newStudentUsername.value='';newStudentFirst.value='';newStudentLast.value='';alert('✅ Student added और access enabled');await loadUsers();refreshAll()}catch(e){alert(e.message)}}
+async function addStudent(){let id=newStudentId.value.trim();if(!/^-?\d+$/.test(id))return alert('Valid Telegram User ID डालें');try{await api('/api/admin/users/create',{method:'POST',body:JSON.stringify({telegram_user_id:id,})});newStudentId.value='';alert('✅ Student added और access enabled');await loadUsers();refreshAll()}catch(e){alert(e.message)}}
 
 async function userAccess(id,blocked){await api('/api/admin/users/'+encodeURIComponent(id)+'/access',{method:'PATCH',body:JSON.stringify({blocked})});await loadUsers();refreshAll()}
 async function userDetail(id){try{let d=await api('/api/admin/users/'+encodeURIComponent(id)+'/performance');let u=d.user,p=d.paper_stats||{};modalBody.innerHTML=`<h2>👤 ${esc(u.name||'Student')}</h2><p><b>Telegram ID:</b> ${esc(u.id)} ${u.username?' · @'+esc(u.username):''}</p><div class="metricgrid"><div class="metric">Copies<b>${u.submissions}</b></div><div class="metric">Average<b>${u.average_percentage}%</b></div><div class="metric">Obtained<b>${u.obtained}/${u.max}</b></div><div class="metric">Last Seen<b style="font-size:14px">${fmtDate(u.last_seen)}</b></div></div><h3 style="margin-top:22px">GS-wise Performance</h3><div class="metricgrid">${Object.entries(p).map(([k,v])=>`<div class="metric"><b>${esc(k)}</b><span>${v.submissions} copies · ${v.average_percentage}%</span><div class="bar" style="margin-top:8px"><i style="width:${Math.min(100,v.average_percentage)}%"></i></div></div>`).join('')}</div><h3 style="margin-top:22px">Recent Copies</h3><div class="tablewrap"><table class="table"><thead><tr><th>Date</th><th>Paper</th><th>Marks</th><th>Language</th><th>PDF</th></tr></thead><tbody>${(d.recent||[]).map(x=>`<tr><td>${fmtDate(x.created_at)}</td><td>${esc(x.paper)}</td><td><b>${x.obtained}/${x.max}</b></td><td>${esc(x.language||'-')}</td><td><button class="btn blue" onclick="pdf('${esc(x.id)}')">Open</button></td></tr>`).join('')}</tbody></table></div>`;modal.classList.remove('hidden')}catch(e){alert(e.message)}}
@@ -4138,7 +4174,7 @@ function filterSubs(){let q=subSearch.value.toLowerCase();renderSubs(SUB_ROWS.fi
 function renderSubs(rows){subsBody.innerHTML=rows.map(x=>`<tr><td>${fmtDate(x.created_at)}</td><td>${esc(x.user_id)}</td><td><b>${esc(x.paper)}</b></td><td><b>${esc(x.obtained)}/${esc(x.max)}</b></td><td>${esc(x.language||'-')}</td><td>${esc(x.filename||'-')}</td><td><button class="btn blue" onclick="submissionDetail('${esc(x.id)}')">Details</button> <button class="btn ghost" onclick="pdf('${esc(x.id)}')">PDF</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">कोई evaluation नहीं मिला।</td></tr>'}
 
 async function loadGroups(){try{let d=await api('/api/admin/groups');groupsBody.innerHTML=(d.items||[]).map(x=>`<tr><td><b>${esc(x.title||'Untitled')}</b><br><small>${esc(x.id)}</small></td><td>${esc(x.type||'-')}</td><td>${x.blocked?'<span class="pill bad">Blocked</span>':x.allowed?'<span class="pill ok">Allowed</span>':'<span class="pill">Not Allowed</span>'}</td><td>-</td><td><button class="btn ${x.allowed?'red':'green'}" onclick="groupAccess('${esc(x.id)}',${x.allowed?'false':'true'})">${x.allowed?'Remove Access':'Allow Access'}</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty">अभी कोई Telegram group registered नहीं है।</td></tr>'}catch(e){alert(e.message)}}
-async function addGroup(){let id=newGroupId.value.trim();if(!/^-?\d+$/.test(id))return alert('Valid Telegram Group ID डालें');try{await api('/api/admin/groups/create',{method:'POST',body:JSON.stringify({telegram_group_id:id,title:newGroupTitle.value.trim(),group_type:newGroupType.value})});newGroupId.value='';newGroupTitle.value='';alert('✅ Group added और access enabled');await loadGroups();refreshAll()}catch(e){alert(e.message)}}
+async function addGroup(){let id=newGroupId.value.trim();if(!/^-?\d+$/.test(id))return alert('Valid Telegram Group ID डालें');try{await api('/api/admin/groups/create',{method:'POST',body:JSON.stringify({telegram_group_id:id,})});newGroupId.value='';alert('✅ Group added और access enabled');await loadGroups();refreshAll()}catch(e){alert(e.message)}}
 
 async function groupAccess(id,allowed){await api('/api/admin/groups/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({allowed})});loadGroups()}
 async function loadSubmissions(){try{let paper=subPaper.value;let d=await api('/api/admin/submissions?limit=300'+(paper?'&paper='+encodeURIComponent(paper):''));SUB_ROWS=d.items||[];filterSubs()}catch(e){alert(e.message)}}
@@ -4146,10 +4182,12 @@ async function submissionDetail(id){try{let d=await api('/api/admin/submissions/
 async function pdf(id){let r=await fetch('/api/admin/submissions/'+encodeURIComponent(id)+'/pdf');if(!r.ok)return alert('PDF access denied');let b=await r.blob(),u=URL.createObjectURL(b);window.open(u,'_blank')}
 async function loadContent(){try{let d=await api('/api/admin/content');contentBody.innerHTML=(d.items||[]).map(x=>`<tr><td>${x.id}</td><td>${esc(x.paper)}</td><td>${esc(x.language)}</td><td>${esc(x.question).slice(0,260)}</td><td>${fmtDate(x.created_at)}</td><td><button class="btn red" onclick="deleteContent(${x.id})">Delete</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">अभी कोई daily content नहीं है।</td></tr>'}catch(e){alert(e.message)}}
 function downloadContentPdf(){window.open('/api/admin/content/pdf','_blank')}
-function addQuestionRow(data={}){const box=document.getElementById('bulkQuestions');const row=document.createElement('div');row.className='card bulk-q-row';row.style.cssText='margin-top:10px;border:1px solid #dbe2ea';row.innerHTML=`<div class="toolbar" style="margin-bottom:8px"><b>Question #${box.children.length+1}</b><button class="btn red" style="margin-left:auto" onclick="this.closest('.bulk-q-row').remove();renumberRows()">Remove</button></div><div class="formgrid" style="grid-template-columns:140px 140px 1fr"><select class="input bulk-paper"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><select class="input bulk-lang"><option>Hindi</option><option>English</option></select><textarea class="input bulk-question" rows="4" placeholder="Daily Question"></textarea></div><textarea class="input bulk-answer" rows="7" style="width:100%;margin-top:8px" placeholder="Model Answer"></textarea>`;box.appendChild(row);row.querySelector('.bulk-paper').value=data.paper||'GS1';row.querySelector('.bulk-lang').value=data.language||'Hindi';row.querySelector('.bulk-question').value=data.question||'';row.querySelector('.bulk-answer').value=data.model_answer||'';renumberRows()}
+function richCmd(btn,cmd){const ed=btn.closest('.bulk-q-row').querySelector('.bulk-answer');ed.focus();document.execCommand(cmd,false,null)}
+function insertTable(btn){const ed=btn.closest('.bulk-q-row').querySelector('.bulk-answer');ed.focus();document.execCommand('insertHTML',false,'<table border="1" style="border-collapse:collapse;width:100%"><tr><th>Heading</th><th>Heading</th></tr><tr><td>Cell</td><td>Cell</td></tr></table><p><br></p>')}
+function addQuestionRow(data={}){const box=document.getElementById('bulkQuestions');const row=document.createElement('div');row.className='card bulk-q-row';row.style.cssText='margin-top:10px;border:1px solid #dbe2ea';row.innerHTML=`<div class="toolbar" style="margin-bottom:8px"><b>Question #${box.children.length+1}</b><button class="btn red" style="margin-left:auto" onclick="this.closest('.bulk-q-row').remove();renumberRows()">Remove</button></div><div class="formgrid" style="grid-template-columns:140px 140px 1fr"><select class="input bulk-paper"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><select class="input bulk-lang"><option>Hindi</option><option>English</option></select><textarea class="input bulk-question" rows="4" placeholder="Daily Question"></textarea></div><div class="rich-toolbar" style="margin-top:8px"><button type="button" class="btn ghost" onclick="richCmd(this,'bold')"><b>B</b></button><button type="button" class="btn ghost" onclick="richCmd(this,'italic')"><i>I</i></button><button type="button" class="btn ghost" onclick="richCmd(this,'insertUnorderedList')">• List</button><button type="button" class="btn ghost" onclick="richCmd(this,'insertOrderedList')">1. List</button><button type="button" class="btn ghost" onclick="insertTable(this)">▦ Table</button></div><div class="input bulk-answer" contenteditable="true" style="width:100%;min-height:180px;margin-top:6px;line-height:1.5" data-placeholder="Model Answer — rich text / table support"></div>`;box.appendChild(row);row.querySelector('.bulk-paper').value=data.paper||'GS1';row.querySelector('.bulk-lang').value=data.language||'Hindi';row.querySelector('.bulk-question').value=data.question||'';row.querySelector('.bulk-answer').innerHTML=data.model_answer||'';renumberRows()}
 function renumberRows(){document.querySelectorAll('.bulk-q-row').forEach((r,i)=>{const b=r.querySelector('b');if(b)b.textContent='Question #'+(i+1)})}
 function clearQuestionRows(){document.getElementById('bulkQuestions').innerHTML='';addQuestionRow()}
-async function saveBulkContent(){const rows=[...document.querySelectorAll('.bulk-q-row')];if(!rows.length)return alert('कम से कम एक question जोड़ें');const items=rows.map(r=>({paper:r.querySelector('.bulk-paper').value,language:r.querySelector('.bulk-lang').value,question:r.querySelector('.bulk-question').value.trim(),model_answer:r.querySelector('.bulk-answer').value.trim()}));const invalid=items.findIndex(x=>!x.question);if(invalid>=0)return alert(`Question #${invalid+1} में question लिखें`);try{const d=await api('/api/admin/content/bulk',{method:'POST',body:JSON.stringify({items})});alert(`✅ ${d.inserted} Daily Questions save हुए${d.skipped?`\n⚠️ ${d.skipped} rows skipped`:''}`);clearQuestionRows();await loadContent()}catch(e){alert(e.message)}}
+async function saveBulkContent(){const rows=[...document.querySelectorAll('.bulk-q-row')];if(!rows.length)return alert('कम से कम एक question जोड़ें');const items=rows.map(r=>({paper:r.querySelector('.bulk-paper').value,language:r.querySelector('.bulk-lang').value,question:r.querySelector('.bulk-question').value.trim(),model_answer:r.querySelector('.bulk-answer').innerHTML.trim()}));const invalid=items.findIndex(x=>!x.question);if(invalid>=0)return alert(`Question #${invalid+1} में question लिखें`);try{const d=await api('/api/admin/content/bulk',{method:'POST',body:JSON.stringify({items})});alert(`✅ ${d.inserted} Daily Questions save हुए${d.skipped?`\n⚠️ ${d.skipped} rows skipped`:''}`);clearQuestionRows();await loadContent()}catch(e){alert(e.message)}}
 async function deleteContent(id){if(!confirm('यह content delete करना है?'))return;await api('/api/admin/content/'+id,{method:'DELETE'});loadContent()}
 async function loadAdmins(){try{let d=await api('/api/admin/admins');adminsBody.innerHTML=(d.items||[]).map(x=>`<tr><td>${esc(x.id)}</td><td><span class="pill role">${esc(x.role)}</span></td><td>${x.active?'<span class="pill ok">Active</span>':'<span class="pill bad">Disabled</span>'}</td><td>${fmtDate(x.last_login)}</td><td>${x.role==='super_admin'?'—':`<button class="btn red" onclick="removeAdmin('${esc(x.id)}')">Remove</button>`}</td></tr>`).join('')}catch(e){alert(e.message)}}
 async function addAdmin(){let id=adminId.value.trim();if(!/^\d+$/.test(id))return alert('Numeric Telegram User ID डालें');await api('/api/admin/admins',{method:'POST',body:JSON.stringify({telegram_user_id:id})});adminId.value='';loadAdmins()}
@@ -4423,6 +4461,69 @@ async def admin_content_bulk(request: Request):
                 skipped+=1; errors.append(f"Row {idx}: paper and question are required"); continue
             conn.exec_driver_sql("""INSERT INTO daily_content(paper,language,question,model_answer,is_active,created_at,updated_at) VALUES (%s,%s,%s,%s,TRUE,%s,%s)""",(paper,language,question,answer,now,now)); inserted+=1
     return {"ok":True,"inserted":inserted,"skipped":skipped,"errors":errors[:20],"message":f"{inserted} Daily Questions added"}
+
+def build_daily_content_pdf(rows, language):
+    """Build a branded, rich-text-friendly Daily Q&A PDF using PyMuPDF Story."""
+    today = datetime.now().strftime("%d %B %Y")
+    socials = "Telegram • YouTube\nInstagram • WhatsApp"
+    story = fitz.Story()
+    css = """<style>body{font-family:sans-serif;color:#151922;font-size:11pt}h1{font-size:20pt;margin:0}h2{font-size:14pt;margin-top:18pt;color:#7b1e1e}h3{font-size:11pt;margin-top:12pt}table{border-collapse:collapse;width:100%}td,th{border:0.7pt solid #b8bec8;padding:5pt} .meta{color:#666;font-size:9pt}.footer{font-size:8pt;color:#666;border-top:0.7pt solid #bbb;padding-top:5pt}</style>"""
+    parts=[css, f'<h1>PRANA PCS Mains AI</h1><div class="meta">{today} • {language}</div><hr>']
+    for i,r in enumerate(rows,1):
+        q=html.escape(str(r.get("question") or ""))
+        ans=str(r.get("model_answer") or "")
+        if not re.search(r'<(p|div|table|ul|ol|strong|em|h[1-6])\b', ans, re.I):
+            ans='<p>'+html.escape(ans).replace('\n','<br>')+'</p>'
+        parts.append(f'<h2>{i}. {html.escape(str(r["paper"]))} — Daily Question</h2><p><b>Question:</b> {q}</p><h3>Model Answer</h3>{ans}')
+    parts.append(f'<p class="footer">Telegram • YouTube<br>Instagram • WhatsApp<br><b>Paid Contents &amp; Batches- 9984351085</b></p>')
+    story.write(''.join(parts))
+    writer=fitz.Document(); page_no=0
+    while True:
+        page_no += 1
+        page=writer.new_page(width=595,height=842)
+        more,filled=story.place(fitz.Rect(45,72,550,790))
+        story.draw(page)
+        logo_path = STATIC_DIR / "branding" / "prana-logo.png"
+        if logo_path.exists():
+            try: page.insert_image(fitz.Rect(45,18,76,49), filename=str(logo_path), overlay=True)
+            except Exception: pass
+        page.insert_text((84,38), "PRANA PCS Mains AI", fontsize=13, fontname="hebo", color=(0.12,0.12,0.12), overlay=True)
+        page.insert_text((430,38), today, fontsize=8, fontname="hebo", color=(0.35,0.35,0.35), overlay=True)
+        page.draw_line((45,800),(550,800),color=(0.65,0.65,0.65),width=0.6,overlay=True)
+        page.insert_text((45,818),"Telegram • YouTube",fontsize=7.5,color=(0.35,0.35,0.35),overlay=True)
+        page.insert_text((45,830),"Instagram • WhatsApp",fontsize=7.5,color=(0.35,0.35,0.35),overlay=True)
+        page.insert_text((365,824),"Paid Contents & Batches- 9984351085",fontsize=7.5,color=(0.35,0.35,0.35),overlay=True)
+        if not more: break
+    out=io.BytesIO(); writer.save(out,garbage=4,deflate=True); writer.close()
+    return out.getvalue()
+
+
+@app.post("/api/app/daily/send-pdf")
+def app_send_daily_pdf(request: Request, language: str = "Hindi", paper: str = ""):
+    uid = require_app_user(request)
+    if not uid:
+        return app_error("Unauthorized", 401)
+    if not bot:
+        return app_error("Telegram bot is not configured.", 500)
+    ensure_admin_content_table()
+    lang = "English" if str(language).lower().startswith("en") else "Hindi"
+    paper_filter = str(paper or "").upper().strip()
+    with engine.connect() as conn:
+        if paper_filter:
+            rows = conn.exec_driver_sql("SELECT id,paper,language,question,model_answer,created_at FROM daily_content WHERE is_active=TRUE AND language=%s AND paper=%s ORDER BY id ASC", (lang, paper_filter)).mappings().all()
+        else:
+            rows = conn.exec_driver_sql("SELECT id,paper,language,question,model_answer,created_at FROM daily_content WHERE is_active=TRUE AND language=%s ORDER BY id ASC", (lang,)).mappings().all()
+    if not rows:
+        return app_error("No Daily Questions available.", 404)
+    try:
+        out = build_daily_content_pdf(rows, lang)
+        bio = io.BytesIO(out); bio.name = "PRANA_PCS_Daily_Questions_Model_Answers.pdf"
+        bot.send_document(str(uid), bio, caption="📚 <b>PRANA PCS Mains AI</b>\nDaily Questions + Model Answers")
+        return {"ok": True, "message": "Daily Questions PDF sent to Telegram chat."}
+    except Exception as e:
+        print("SEND DAILY PDF ERROR:", e)
+        return app_error("Daily Questions PDF भेजने में समस्या हुई।", 500)
+
 
 @app.get("/api/admin/content")
 def admin_content(request: Request):
