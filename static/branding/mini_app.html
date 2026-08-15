@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111317">
+<title>PRANA PCS — AI Evaluator</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:#0f1115;--surface:#171a20;--surface2:#1e222a;--line:#2d323c;
+  --text:#f5f3ee;--muted:#a8adb7;--yellow:#ffd84d;--red:#ff5260;
+  --green:#35c88a;--blue:#6fa7ff;--shadow:0 16px 40px rgba(0,0,0,.24);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{padding-bottom:calc(82px + env(safe-area-inset-bottom))}
+button,input,select{font:inherit}
+button{cursor:pointer}
+.app{max-width:760px;margin:auto;min-height:100vh}
+.header{position:sticky;top:0;z-index:20;padding:13px 16px 12px;background:rgba(15,17,21,.92);backdrop-filter:blur(18px);border-bottom:1px solid rgba(255,255,255,.06)}
+.header-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{display:flex;align-items:center;gap:10px}
+.brand img{width:44px;height:44px;border-radius:50%;object-fit:cover;border:1px solid #f3ead8}
+.brand-title{font-weight:900;letter-spacing:.5px;font-size:17px}.brand-sub{font-size:10px;color:#b6b8bf;letter-spacing:1.2px;margin-top:1px}
+.lang{border:1px solid var(--line);background:var(--surface);color:var(--text);padding:7px 10px;border-radius:12px;font-size:12px}
+main{padding:16px}
+.view{display:none}.view.active{display:block}
+.hero{border:1px solid #343943;border-radius:24px;padding:20px;background:radial-gradient(circle at 85% 15%,rgba(255,216,77,.13),transparent 30%),linear-gradient(145deg,#1c2027,#13161b);box-shadow:var(--shadow);position:relative;overflow:hidden}
+.hero:after{content:"LET'S PRANA";position:absolute;right:-5px;bottom:-4px;font-size:42px;font-weight:900;color:rgba(255,216,77,.045);letter-spacing:1px}
+.eyebrow{font-size:11px;color:var(--yellow);font-weight:800;letter-spacing:1.3px;text-transform:uppercase}.hero h1{font-size:27px;line-height:1.1;margin:8px 0 7px}.hero p{margin:0;color:var(--muted);font-size:13px;max-width:90%;line-height:1.5}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:13px}.card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:15px}.card-title{font-weight:800;font-size:14px}.muted{color:var(--muted)}
+.score-card{display:flex;align-items:center;justify-content:space-between;gap:10px}.score{font-size:30px;font-weight:900}.score small{font-size:12px;color:var(--muted);font-weight:600}
+.section-head{display:flex;justify-content:space-between;align-items:center;margin:22px 2px 10px}.section-head h2{font-size:16px;margin:0}.section-head span{font-size:11px;color:var(--muted)}
+.question-card{background:linear-gradient(145deg,#20252e,#171a20);border:1px solid #353b46;border-radius:20px;padding:17px}.badge{display:inline-flex;padding:5px 8px;border-radius:8px;background:rgba(255,216,77,.12);color:var(--yellow);font-size:11px;font-weight:800}.question{font-size:15px;line-height:1.65;margin:12px 0}.meta{display:flex;gap:7px;flex-wrap:wrap;color:var(--muted);font-size:11px}
+.primary{width:100%;border:0;border-radius:14px;padding:13px 15px;background:linear-gradient(135deg,#ffd84d,#ffb52f);color:#171717;font-weight:900;box-shadow:0 10px 24px rgba(255,194,53,.16)}
+.secondary{border:1px solid var(--line);border-radius:13px;padding:11px 13px;background:var(--surface2);color:var(--text);font-weight:750}.danger{color:#ff8b93}.success{color:var(--green)}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.action{display:flex;align-items:center;gap:10px;text-align:left;min-height:70px}.action .ico{font-size:22px}.admin-action{grid-column:1/-1;border-color:rgba(255,216,77,.28);background:linear-gradient(145deg,#211f18,#171a20)}.action b{display:block;font-size:13px}.action span{display:block;color:var(--muted);font-size:10px;margin-top:3px}
+.paper-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.paper{border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:14px;padding:12px 6px;font-weight:900}.paper.active{border-color:var(--yellow);background:rgba(255,216,77,.08);color:var(--yellow)}
+.upload{border:1.5px dashed #535a66;border-radius:20px;padding:25px 16px;text-align:center;background:#15181e}.upload .big{font-size:38px}.upload h3{margin:9px 0 4px}.upload p{margin:0;color:var(--muted);font-size:12px;line-height:1.5}.file-input{display:none}
+.file-list{margin-top:11px;display:grid;gap:7px}.file-row{display:flex;justify-content:space-between;gap:8px;padding:10px 11px;border:1px solid var(--line);background:var(--surface);border-radius:12px;font-size:12px}.remove{background:none;border:0;color:#ff8b93}
+.info{border:1px solid #343a45;border-radius:14px;background:#15181e;padding:12px;margin-top:12px;font-size:11px;line-height:1.55;color:var(--muted)}.info strong{color:var(--text)}
+.processing{text-align:center;padding:45px 12px}.orb{width:92px;height:92px;margin:0 auto 20px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle,#ffd84d 0 10%,rgba(255,216,77,.18) 11% 35%,transparent 36%),#1d2027;box-shadow:0 0 55px rgba(255,216,77,.15);animation:pulse 1.7s infinite}.processing h2{margin:0 0 7px}.processing p{color:var(--muted);font-size:13px}.steps{display:grid;gap:8px;text-align:left;max-width:330px;margin:24px auto}.step{padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface);font-size:12px}.step.done{color:var(--green)}.step.live{color:var(--yellow)}
+.result-score{text-align:center;padding:22px;border-radius:22px;background:linear-gradient(145deg,#252a32,#171a20);border:1px solid #3b414c}.result-score .number{font-size:45px;font-weight:950}.result-score .pct{color:var(--muted);font-size:12px}.bars{display:grid;gap:10px}.barrow{display:grid;grid-template-columns:34px 1fr 52px;align-items:center;gap:8px;font-size:11px}.bar{height:8px;border-radius:99px;background:#303640;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--yellow),#ff8d3d);border-radius:99px}.feedback{font-size:13px;line-height:1.7;color:#e7e5df;white-space:pre-line}.chips{display:flex;gap:7px;flex-wrap:wrap}.chip{font-size:10px;padding:6px 8px;border-radius:9px;background:#252a32;color:#c7cbd2}
+.history{display:grid;gap:9px}.history-card{display:flex;align-items:center;justify-content:space-between;gap:10px}.history-card .marks{font-weight:900}.history-card small{display:block;color:var(--muted);margin-top:4px}
+.footer{padding:24px 16px 10px;text-align:center;color:#777d88;font-size:10px}.footer-brand{display:flex;justify-content:center;align-items:center;gap:7px;color:#c7c5bd;font-weight:850;font-size:12px}.footer-brand img{width:25px;height:25px;border-radius:50%;border:1px solid #7f7d76}.lets{color:var(--yellow);font-size:9px;letter-spacing:1px;margin:3px 0 13px}.socials{display:grid;grid-template-columns:1fr 1fr;gap:7px 9px;max-width:430px;margin:0 auto}.social{border:1px solid var(--line);background:var(--surface);border-radius:11px;padding:8px 9px;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:5px;justify-content:center}.social svg{width:14px;height:14px;fill:currentColor}.copyright{margin-top:13px;font-weight:700}
+.nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:rgba(18,20,25,.96);backdrop-filter:blur(18px);border-top:1px solid rgba(255,255,255,.07);display:grid;grid-template-columns:repeat(5,1fr);z-index:30}.nav button{border:0;background:none;color:#777e8a;padding:5px 2px;font-size:9px}.nav button span{display:block;font-size:20px;margin-bottom:2px}.nav button.active{color:var(--yellow)}
+.loading{padding:60px 20px;text-align:center;color:var(--muted)}.spinner{width:30px;height:30px;border:3px solid #303640;border-top-color:var(--yellow);border-radius:50%;margin:0 auto 13px;animation:spin .8s linear infinite}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:50;display:none;align-items:flex-end}.modal.open{display:flex}.sheet{width:100%;max-height:90vh;overflow:auto;background:#171a20;border-radius:24px 24px 0 0;padding:18px 16px 30px;border-top:1px solid #3a404a}.sheet-top{display:flex;justify-content:space-between;align-items:center}.close{border:0;background:#272c34;color:#fff;border-radius:10px;padding:8px 11px}
+.toast{position:fixed;left:50%;bottom:95px;transform:translateX(-50%);background:#f2eee4;color:#171717;padding:10px 13px;border-radius:12px;font-size:12px;font-weight:750;display:none;z-index:80;box-shadow:var(--shadow)}
+@keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{50%{transform:scale(1.05)}}
+@media(min-width:700px){main{padding:22px}.nav{bottom:16px;border:1px solid #2d323c;border-radius:18px;width:720px}.hero h1{font-size:32px}}
+
+.theme-toggle{position:fixed;right:14px;top:14px;z-index:99;border:1px solid #444;background:#171a20;color:#fff;border-radius:999px;width:38px;height:38px;font-size:18px;cursor:pointer}.dark{background:#0e1014!important;color:#edf0f5!important}.dark .card,.dark .question-card,.dark .upload,.dark .feedback,.dark .sheet{background:#171a20!important;color:#edf0f5!important;border-color:#2d323c!important}.dark .muted,.dark .info{color:#aeb5c2!important}.dark input,.dark select,.dark textarea{background:#171a20!important;color:#edf0f5!important;border-color:#39414f!important}.daily-filters{display:flex;gap:6px;overflow:auto;margin:7px 0}.daily-filters button{flex:0 0 auto;padding:5px 8px;border-radius:8px;border:1px solid #d4d9e2;background:transparent;font-size:10px}.daily-filters button.active{background:#111827;color:#fff}.daily-q{font-size:12px;line-height:1.4}.daily-answer{font-size:12px;line-height:1.5;overflow:auto}.daily-answer table{border-collapse:collapse;width:100%}.daily-answer td,.daily-answer th{border:1px solid #aaa;padding:4px}
+
+:root{--bg:#f6f7fb;--surface:#ffffff;--surface2:#f0f2f6;--line:#dfe3ea;--text:#171a20;--muted:#667085;--yellow:#d89f00;--red:#c93545;--green:#198754;--blue:#3978d8;--shadow:0 16px 40px rgba(16,24,40,.10)}
+body{background:var(--bg);color:var(--text)}
+.theme-toggle-inline{border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:12px;width:38px;height:34px;font-size:17px}
+.light .header{background:rgba(246,247,251,.94);border-bottom-color:var(--line)}
+.light .hero{background:radial-gradient(circle at 85% 15%,rgba(255,216,77,.16),transparent 30%),linear-gradient(145deg,#ffffff,#f4f6fa);border-color:var(--line)}
+.light .question-card{background:linear-gradient(145deg,#ffffff,#f3f5f8);border-color:var(--line)}
+.light .upload,.light .info{background:#fff;border-color:var(--line);color:var(--muted)}
+.light .processing .step{background:#fff}
+.light .result-score{background:linear-gradient(145deg,#fff,#f2f4f7);border-color:var(--line)}
+.light .feedback{color:#263041}
+.light .chip{background:#eef1f5;color:#475467}
+.light .nav{background:rgba(255,255,255,.96);border-top-color:var(--line)}
+.light .nav button{color:#667085}
+.light .sheet{background:#fff;border-top-color:var(--line)}
+.light .close{background:#eef1f5;color:#171a20}
+.light .footer-brand,.light .social{color:#475467}
+.dark{background:var(--bg)!important;color:var(--text)!important}
+.dark .header{background:rgba(15,17,21,.92)}
+.dark .hero{background:radial-gradient(circle at 85% 15%,rgba(255,216,77,.13),transparent 30%),linear-gradient(145deg,#1c2027,#13161b)}
+.dark .question-card{background:linear-gradient(145deg,#20252e,#171a20)}
+.dark .upload,.dark .info{background:#15181e}
+.dark .result-score{background:linear-gradient(145deg,#252a32,#171a20)}
+.dark .footer-brand,.dark .social{color:#c7cbd2}
+
+/* PRANA PCS premium theme refinement */
+.dark{
+  --bg:#0b0e13!important;
+  --surface:#151922!important;
+  --surface2:#1c222c!important;
+  --line:#343b48!important;
+  --text:#f7f8fb!important;
+  --muted:#b7beca!important;
+  --yellow:#ffd84d!important;
+  --red:#ff6874!important;
+  --green:#48d69a!important;
+  --blue:#79adff!important;
+  --shadow:0 18px 45px rgba(0,0,0,.42)!important;
+}
+.light{
+  --bg:#f6f7fb!important;--surface:#fff!important;--surface2:#f0f2f6!important;
+  --line:#dfe3ea!important;--text:#171a20!important;--muted:#667085!important;
+}
+.dark .hero:after{color:rgba(255,216,77,.115)!important;font-size:48px;right:-2px;bottom:-2px;text-shadow:0 0 24px rgba(255,216,77,.08)}
+.light .hero:after{color:rgba(183,130,0,.075)!important}
+.dark .header,.dark .nav{background:rgba(10,13,18,.94)!important;border-color:#2c3440!important}
+.dark .brand-sub,.dark .section-head span,.dark .meta,.dark .copyright{color:#b7beca!important}
+.dark .card,.dark .question-card,.dark .upload,.dark .info,.dark .result-score,.dark .step,.dark .file-row,.dark .paper,.dark .social{background:var(--surface)!important;color:var(--text)!important;border-color:var(--line)!important}
+.dark .question-card{background:linear-gradient(145deg,#1c222b,#151922)!important}
+.dark .upload{background:linear-gradient(145deg,#151a22,#10141a)!important}
+.dark .secondary,.dark .theme-toggle-inline,.dark .lang,.dark .close{background:var(--surface2)!important;color:var(--text)!important;border-color:var(--line)!important}
+.dark .paper.active{background:rgba(255,216,77,.13)!important;color:#ffe27a!important;border-color:#ffd84d!important}
+.dark .daily-filters button{color:#e8ebf1!important;border-color:#4a5362!important;background:#151922!important}
+.dark .daily-filters button.active{background:#ffd84d!important;color:#171717!important;border-color:#ffd84d!important}
+.dark .daily-answer{color:#edf0f5!important;background:#151922!important}
+.dark .daily-answer table,.dark .daily-answer td,.dark .daily-answer th{border-color:#596273!important;color:#edf0f5!important}
+.dark .chip{background:#242b36!important;color:#d8dee8!important}
+.dark .feedback{color:#edf0f5!important}
+.dark .bar{background:#353d49!important}
+.dark .nav button{color:#aeb6c3!important}
+.dark .nav button.active{color:#ffd84d!important}
+.theme-toggle-inline{transition:transform .18s ease,background .18s ease,border-color .18s ease}
+.theme-toggle-inline:active{transform:scale(.94)}
+@media(max-width:520px){.hero:after{font-size:38px!important;right:-8px}.social{min-height:38px}}
+</style>
+</head>
+<body>
+<div class="app">
+<header class="header">
+  <div class="header-row">
+    <div class="brand">
+      <img src="/static/branding/prana-logo.png" alt="Prana PCS">
+      <div><div class="brand-title">PRANA PCS</div><div class="brand-sub">AI MAINS EVALUATOR</div></div>
+    </div>
+    <div style="display:flex;gap:7px;align-items:center"><button class="theme-toggle-inline" id="themeToggle" onclick="toggleTheme()" aria-label="Toggle theme">☀</button><button class="lang" id="langBtn" onclick="toggleLang()">हिन्दी</button></div>
+  </div>
+</header>
+
+<main>
+  <section id="authView" class="loading view active"><div class="spinner"></div><div>Telegram verification चल रही है…</div></section>
+  <section id="deniedView" class="view"><div class="hero"><div class="eyebrow">ACCESS CONTROL</div><h1>Access अभी उपलब्ध नहीं है</h1><p id="deniedText">Admin से access enable करवाएँ।</p></div></section>
+
+  <section id="adminView" class="view">
+    <div class="section-head"><h2 id="adminTitle">⚙️ Admin Panel</h2><span id="adminRole">ADMIN</span></div>
+    <div class="info" style="margin-bottom:12px"><strong>PRANA PCS Admin</strong><br>यह वही secure Admin Panel है जो authorized Telegram account के लिए खुल रहा है।</div>
+    <div style="border:1px solid var(--line);border-radius:18px;overflow:hidden;background:#fff;box-shadow:var(--shadow)">
+      <iframe id="adminFrame" src="about:blank" title="PRANA PCS Admin Panel" style="display:block;width:100%;height:calc(100vh - 185px);min-height:650px;border:0;background:#f4f6fb"></iframe>
+    </div>
+  </section>
+
+  <section id="homeView" class="view">
+    <div class="hero"><div class="eyebrow">LET'S PRANA</div><h1 id="hello">नमस्ते 👋</h1><p id="heroSub">AI Powered Evaluation.</p></div>
+    <div id="accessBanner" class="info" style="margin-top:12px"></div>
+    <div class="grid2">
+      <div class="card score-card"><div><div class="muted" style="font-size:11px">Overall</div><div class="score" id="overallScore">0%</div></div><div style="font-size:25px">📈</div></div>
+      <div class="card score-card"><div><div class="muted" style="font-size:11px">Evaluations</div><div class="score" id="evalCount">0</div></div><div style="font-size:25px">📄</div></div>
+    </div>
+    <div class="section-head"><h2 id="dailyTitle">आज का प्रश्न</h2><span>DAILY</span></div>
+    <div id="dailyCard" class="question-card"><div class="muted">Loading…</div></div>
+    <div class="section-head"><h2 id="quickTitle">Quick Actions</h2></div>
+    <div class="actions">
+      <button class="card action" onclick="go('evaluate')"><span class="ico">📤</span><span><b id="qa1">Copy Evaluate</b><span id="qa1s">AI examiner checking</span></span></button>
+      <button class="card action" onclick="go('performance')"><span class="ico">📊</span><span><b id="qa2">My Performance</b><span id="qa2s">GS-wise progress</span></span></button>
+      <button class="card action" onclick="go('history')"><span class="ico">📚</span><span><b id="qa3">Evaluation History</b><span id="qa3s">All evaluated copies</span></span></button>
+      <button class="card action" onclick="go('content')"><span class="ico">📝</span><span><b id="qa4">Model Answer</b><span id="qa4s">Daily question & answer</span></span></button>
+      <button id="adminAction" class="card action admin-action" style="display:none" onclick="go('admin')"><span class="ico">⚙️</span><span><b id="adminActionTitle">Admin Panel</b><span id="adminActionSub">Manage PRANA PCS</span></span></button>
+    </div>
+  </section>
+
+  <section id="evaluateView" class="view">
+    <div class="section-head"><h2 id="evalTitle">Evaluate Your Copy</h2><span>AI</span></div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="section-head"><h2>Exam & Evaluation Type</h2><span>UPPCS DEFAULT</span></div>
+      <div class="grid2">
+        <select id="examSelect" class="lang"><option value="UPPCS">UPPCS</option><option value="BPSC">BPSC</option><option value="RO_ARO">RO/ARO</option><option value="BEO">BEO</option></select>
+        <select id="evaluationType" class="lang" onchange="onEvaluationTypeChange()"><option value="GENERAL">General Evaluation</option><option value="PYQ">PYQs</option><option value="DAILY">Daily Questions</option><option value="GROUP">Group</option><option value="OTHER">Other</option></select>
+      </div>
+      <div id="sourceWrap" style="display:none;margin-top:10px"><select id="sourceSelect" class="lang" style="width:100%" onchange="sourceChanged()"><option value="">Select uploaded source</option></select><div id="sourceHint" class="muted" style="font-size:11px;margin-top:6px"></div></div>
+      <div id="mediumWrap" style="display:none;margin-top:10px"><select id="mediumSelect" class="lang" style="width:100%"><option value="Hindi">Hindi</option><option value="English">English</option></select><div class="muted" style="font-size:11px;margin-top:6px">Essay किसी भी medium — Hindi या English — में लिख सकते हैं।</div></div>
+    </div>
+    <div class="upload" onclick="document.getElementById('fileInput').click()"><div class="big">📄</div><h3 id="uploadTitle">Upload Answer Copy</h3><p>PDF / JPG / PNG / WEBP<br>Multiple images भी upload कर सकते हैं।</p><input id="fileInput" class="file-input" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" multiple onchange="filesChanged(event)"></div>
+    <div id="fileList" class="file-list"></div>
+    <div class="section-head"><h2 id="paperTitle">Select Paper</h2></div>
+    <div class="paper-grid" id="paperGrid"></div>
+    <div class="info"><strong>🌐 Copy Language & Marking</strong><br>Hindi copy → Hindi evaluation. English copy → English evaluation. Essay में Hindi/English दोनों स्वीकार होंगे।</div>
+    <div style="margin-top:14px"><button class="primary" id="submitBtn" onclick="submitEvaluation()">🚀 Evaluate My Copy</button></div>
+  </section>
+
+  <section id="processingView" class="view">
+    <div class="processing"><div class="orb">✨</div><h2 id="processingTitle">AI is evaluating your copy</h2><p id="processingSub">Examiner-style checking चल रही है।</p>
+      <div class="steps"><div class="step done">✓ Copy received</div><div class="step done">✓ Question demand analysis</div><div class="step live" id="stepEval">● Content + value addition evaluation</div><div class="step" id="stepPdf">○ Final evaluated PDF preparation</div></div>
+    </div>
+  </section>
+
+  <section id="resultView" class="view">
+    <div class="section-head"><h2 id="resultTitle">Evaluation Result</h2><span id="resultLang"></span></div>
+    <div class="result-score"><div class="number" id="resultMarks">—</div><div class="pct" id="resultPct">—</div></div>
+    <div class="section-head"><h2 id="qwiseTitle">Question-wise Performance</h2></div>
+    <div class="card bars" id="qwise"></div>
+    <div class="section-head"><h2 id="feedbackTitle">Examiner's Overall Feedback</h2></div>
+    <div class="card feedback" id="feedback"></div>
+    <div class="section-head"><h2 id="demandTitle">Question Demand</h2></div>
+    <div class="card" id="demandBox"></div>
+    <div class="actions" style="margin-top:12px">
+  <button class="secondary" id="sendEvaluatedBtn" onclick="sendEvaluatedCopy()">📨 Send Copy on Chat</button>
+</div>
+  </section>
+
+  <section id="performanceView" class="view">
+    <div class="section-head"><h2 id="perfTitle">My Performance</h2><span>ANALYTICS</span></div>
+    <div class="hero"><div class="eyebrow">OVERALL</div><h1 id="perfScore">0%</h1><p id="perfSub">आपकी evaluations से calculated performance.</p></div>
+    <div class="section-head"><h2 id="paperPerfTitle">GS-wise Performance</h2></div>
+    <div class="card bars" id="paperBars"></div>
+    <div class="section-head"><h2 id="recentTitle">Recent Trend</h2></div>
+    <div class="card" id="trend"></div>
+    <div class="section-head"><h2 id="mistakesTitle">Where You Are Losing Marks</h2></div>
+    <div class="card" id="mistakesBox"><div class="muted">Loading detailed analysis…</div></div>
+    <div class="section-head"><h2 id="strengthsTitle">Strong Areas</h2></div>
+    <div class="card" id="strengthsBox"><div class="muted">Loading…</div></div>
+    <div class="section-head"><h2 id="aiInputTitle">AI Evaluation Inputs</h2></div>
+    <div class="card" id="aiInputBox"><div class="muted">Question demand, skipped components, annotations और feedback को performance analysis में शामिल किया जाता है।</div></div>
+  </section>
+
+  <section id="historyView" class="view">
+    <div class="section-head"><h2 id="historyTitle">Evaluation History</h2><span id="historyCount"></span></div>
+    <div class="paper-grid" id="historyFilters"></div>
+    <div class="history" id="historyList"><div class="loading">Loading…</div></div>
+  </section>
+
+  <section id="contentView" class="view">
+    <div class="section-head"><h2 id="contentTitle">Daily Question & Model Answer</h2><span>PRANA PCS</span></div>
+    <div id="contentCard" class="question-card"><div class="muted">Loading…</div></div>
+    <div class="section-head"><h2 id="allDailyTitle">All Daily Questions</h2><span id="dailyCount"></span></div>
+    <div id="dailyList" class="history"></div>
+  </section>
+
+  <div class="footer">
+    <div class="footer-brand"><img src="/static/branding/prana-logo.png" alt=""><span>PRANA PCS</span></div>
+    <div class="lets">LET'S PRANA</div>
+    <div class="socials">
+      <a class="social" href="https://t.me/PranaPCSofficial" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M21.5 4.1 18.3 20c-.2 1.1-.8 1.4-1.7.9l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.3-8.4c.4-.4-.1-.6-.6-.2L5.8 13.7.9 12.2c-1.1-.3-1.1-1.1.2-1.6L20.1 3c.9-.3 1.7.2 1.4 1.1Z"/></svg>PranaPcsOfficial</a>
+      <a class="social" href="https://www.instagram.com/Prana_Pcs" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5Zm0 2a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7Zm5 3.5A4.5 4.5 0 1 1 7.5 12 4.5 4.5 0 0 1 12 7.5Zm0 2A2.5 2.5 0 1 0 14.5 12 2.5 2.5 0 0 0 12 9.5ZM17.3 6.2a1.1 1.1 0 1 1-1.1 1.1 1.1 0 0 1 1.1-1.1Z"/></svg>Prana Pcs</a>
+      <a class="social" href="https://youtube.com/@pranapcsofficial?si=f1WqgbuoqZWppFjQ" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8ZM9.6 15.8V8.2l6.4 3.8-6.4 3.8Z"/></svg>PranaPcsOfficial</a>
+      <a class="social" href="https://whatsapp.com/channel/0029Va4ljUqDOQIfuhQhq32m" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-8.7 15L2 22l5.2-1.3A10 10 0 1 0 12 2Zm0 18a8 8 0 0 1-4.1-1.1l-.3-.2-3.1.8.8-3-.2-.3A8 8 0 1 1 12 20Zm4.6-5.9c-.2-.1-1.2-.6-1.4-.7-.2-.1-.3-.1-.5.1-.1.2-.5.7-.6.8-.1.2-.2.2-.4.1a6 6 0 0 1-1.7-1.1 6.8 6.8 0 0 1-1.2-1.5c-.1-.2 0-.3.1-.4l.4-.5c.1-.1.1-.2.2-.3 0-.1 0-.3-.1-.4l-.6-1.4c-.2-.4-.3-.4-.5-.4h-.4c-.1 0-.4.1-.6.3-.2.2-.8.8-.8 1.9s.8 2.2.9 2.4c.1.2 1.6 2.5 3.8 3.4.5.2.9.4 1.2.5.4-.1 1.2-.5 1.4-1 .2-.5.2-.9.1-1-.1-.1-.2-.2-.4-.3Z"/></svg>Prana Pcs</a>
+    </div>
+    <div class="copyright">Paid Batches &amp; Content - 9984351085</div>
+  </div>
+</main>
+
+<nav class="nav" id="nav">
+  <button data-view="home" onclick="go('home')"><span>⌂</span><b>Home</b></button>
+  <button data-view="performance" onclick="go('performance')"><span>◔</span><b>Performance</b></button>
+  <button data-view="evaluate" onclick="go('evaluate')"><span>＋</span><b>Evaluate</b></button>
+  <button data-view="history" onclick="go('history')"><span>▤</span><b>History</b></button>
+  <button data-view="content" onclick="go('content')"><span>✦</span><b>Daily</b></button>
+</nav>
+</div>
+
+<div class="modal" id="modal" onclick="if(event.target===this)closeModal()"><div class="sheet"><div class="sheet-top"><b id="modalTitle">Details</b><button class="close" onclick="closeModal()">Close</button></div><div id="modalBody" style="margin-top:14px"></div></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+const state = {user:null,admin:null,lang:(localStorage.getItem('prana_ui_lang')||'hi'),theme:((localStorage.getItem('prana_theme')==='dark')?'dark':'light'),files:[],paper:'GS3',exam:'UPPCS',evaluationType:'GENERAL',sourceId:'',medium:'',catalog:[],evaluationAccess:false,accessSource:'none',trialCopiesUsed:0,trialCopiesLimit:3,trialQuestionsUsed:0,trialQuestionsLimit:10,dailyDate:'',submission:null,result:null,historyPaper:''};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[x]));
+const pct=(a,b)=>b?Math.round((Number(a||0)/Number(b||1))*1000)/10:0;
+function toast(t){$('toast').textContent=t;$('toast').style.display='block';setTimeout(()=>$('toast').style.display='none',2600)}
+function setText(id,v){if($(id))$(id).textContent=v}
+function toggleLang(){state.lang=state.lang==='hi'?'en':'hi';localStorage.setItem('prana_ui_lang',state.lang);applyLang();loadDaily()}
+function applyLang(){
+  const en=state.lang==='en';setText('langBtn',en?'हिन्दी':'English');
+  setText('heroSub',en?'AI Powered Evaluation.':'AI Powered Evaluation.');
+  setText('dailyTitle',en?"Today's Question":'आज का प्रश्न');setText('quickTitle',en?'Quick Actions':'Quick Actions');
+  setText('qa1',en?'Evaluate Copy':'Copy Evaluate');setText('qa1s',en?'AI examiner checking':'AI examiner checking');setText('qa2',en?'My Performance':'My Performance');setText('qa2s',en?'GS-wise progress':'GS-wise progress');setText('qa3',en?'Evaluation History':'Evaluation History');setText('qa3s',en?'All evaluated copies':'All evaluated copies');setText('qa4',en?'Model Answer':'Model Answer');setText('qa4s',en?'Daily question & answer':'Daily question & answer');
+  setText('adminTitle',en?'⚙️ Admin Panel':'⚙️ Admin Panel');setText('adminActionTitle',en?'Admin Panel':'Admin Panel');setText('adminActionSub',en?'Manage PRANA PCS':'PRANA PCS manage करें');
+  setText('evalTitle',en?'Evaluate Your Copy':'Evaluate Your Copy');setText('uploadTitle',en?'Upload Answer Copy':'Upload Answer Copy');setText('paperTitle',en?'Select Paper':'Select Paper');setText('submitBtn',en?'🚀 Evaluate My Copy':'🚀 Evaluate My Copy');
+  setText('processingTitle',en?'AI is evaluating your copy':'AI is evaluating your copy');setText('processingSub',en?'PRANA AI is evaluating your copy.':'PRANA AI आपकी copy evaluate कर रहा है।');
+  setText('resultTitle',en?'Evaluation Result':'Evaluation Result');setText('sendEvaluatedBtn',en?'📨 Send Copy on Chat':'📨 Send Copy on Chat');setText('qwiseTitle',en?'Question-wise Performance':'Question-wise Performance');setText('feedbackTitle',en?"Examiner's Overall Feedback":"Examiner's Overall Feedback");setText('demandTitle',en?'Question Demand':'Question Demand');
+  setText('perfTitle',en?'My Performance':'My Performance');setText('paperPerfTitle',en?'GS-wise Performance':'GS-wise Performance');setText('recentTitle',en?'Recent Trend':'Recent Trend');setText('mistakesTitle',en?'Where You Are Losing Marks':'कहाँ Marks कट रहे हैं');setText('strengthsTitle',en?'Strong Areas':'मजबूत क्षेत्र');setText('aiInputTitle',en?'AI Evaluation Inputs':'AI Evaluation Inputs');setText('allDailyTitle',en?'All Daily Questions':'सभी Daily Questions');setText('historyTitle',en?'Evaluation History':'Evaluation History');setText('contentTitle',en?'Daily Question & Model Answer':'Daily Question & Model Answer');
+  setText('uploadTitle',en?'Upload Answer Copy':'उत्तर कॉपी अपलोड करें');setText('paperTitle',en?'Select Paper':'पेपर चुनें');setText('submitBtn',en?'🚀 Evaluate My Copy':'🚀 मेरी कॉपी Evaluate करें');setText('contentTitle',en?'Daily Question & Model Answer':'Daily Question & Model Answer');setText('allDailyTitle',en?'All Daily Questions':'सभी Daily Questions');setText('historyTitle',en?'Evaluation History':'Evaluation History');setText('perfTitle',en?'My Performance':'My Performance');setText('resultTitle',en?'Evaluation Result':'Evaluation Result');renderPaperGrid();renderHistoryFilters();
+}
+async function api(path,opt={}){const r=await fetch(path,opt);const d=await r.json().catch(()=>({}));if(!r.ok||d.ok===false)throw new Error(d.error||'Request failed');return d}
+async function auth(){
+  if(!tg){showDenied('यह Mini App Telegram के अंदर से खोलें।');return}
+  tg.ready();tg.expand();
+  try{
+    const d=await api('/api/app/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData})});
+    state.user=d.user;state.evaluationAccess=!!d.evaluation_access;state.accessSource=d.evaluation_access_source||'none';
+    state.trialCopiesUsed=Number(d.trial_copies_used||0);state.trialCopiesLimit=Number(d.trial_copies_limit||3);state.trialQuestionsUsed=Number(d.trial_questions_used||0);state.trialQuestionsLimit=Number(d.trial_questions_limit||10);
+    try{const ad=await api('/api/app/admin-auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData})});state.admin=ad;$('adminAction').style.display='flex';setText('adminRole',ad.role==='super_admin'?'SUPER ADMIN':'ADMIN');}catch(_){state.admin=null;$('adminAction').style.display='none'}
+    hide('authView');$('homeView').classList.add('active');setText('hello',(state.lang==='en'?'Hello':'नमस्ते')+' '+esc(state.user.name)+' 👋');
+    updateAccessUI();loadDashboard();loadDaily();loadCatalog();applyLang();applyTheme();
+  }catch(e){showDenied(e.message)}
+}
+function updateAccessUI(){
+  const b=$('accessBanner'),btn=$('submitBtn');
+  if(state.evaluationAccess){
+    if(state.accessSource==='trial'){b.innerHTML=`<strong>🎟️ Trial Access</strong><br>${state.trialCopiesUsed}/${state.trialCopiesLimit} copies used · ${state.trialQuestionsUsed}/${state.trialQuestionsLimit} questions used. Limit: 3 copies OR 10 questions.`;b.style.borderColor='#d6a400';}
+    else{b.innerHTML='<strong>✅ Evaluation Access Active</strong><br>आपकी evaluation access enabled है।';b.style.borderColor='var(--green)';}
+    btn.disabled=false;btn.style.opacity='1';
+  }else{b.innerHTML='<strong>🔒 Evaluation Access नहीं है</strong><br>पूरा Mini App, Daily Questions, Performance और History दिखेंगे; copy evaluation के लिए Admin से access enable करवाना होगा।';b.style.borderColor='var(--red)';btn.disabled=true;btn.style.opacity='.55';}
+}
+async function loadCatalog(){try{const d=await api('/api/content/catalog');state.catalog=d.items||[];onEvaluationTypeChange()}catch(e){state.catalog=[]}}
+function onEvaluationTypeChange(){
+  state.evaluationType=$('evaluationType').value;const t=state.evaluationType;const sw=$('sourceWrap'),mw=$('mediumWrap'),ss=$('sourceSelect');
+  mw.style.display=state.paper==='ESSAY'?'block':'none';
+  if(t==='PYQ'||t==='DAILY'||t==='GROUP'){
+    sw.style.display='block';let rows=state.catalog.filter(x=>x.content_type===t.toLowerCase());
+    if(t==='PYQ'||t==='GROUP')rows=rows.filter(x=>x.exam===$('examSelect').value);
+    ss.innerHTML='<option value="">Select uploaded source</option>'+rows.map(x=>{let label=t==='PYQ'?`${x.exam} • ${x.year||''} • ${x.paper} • ${x.language}`:`${x.content_date||''} • ${x.paper} • ${x.language}`;return `<option value="${esc(x.id)}">${esc(label)}</option>`}).join('');
+    $('sourceHint').textContent=rows.length?'केवल Admin द्वारा uploaded content ही evaluation के लिए उपलब्ध है।':'अभी इस selection के लिए कोई uploaded content नहीं है।';
+  }else{sw.style.display='none';ss.value='';state.sourceId='';}
+}
+function sourceChanged(){state.sourceId=$('sourceSelect').value}
+$('examSelect').addEventListener('change',onEvaluationTypeChange);
+function hide(id){$(id).classList.remove('active')}
+function showDenied(msg){hide('authView');$('deniedView').classList.add('active');setText('deniedText',msg);$('nav').style.display='none'}
+function go(view){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));const el=$(view+'View');if(el)el.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));if(view==='home')loadDashboard();if(view==='performance')loadPerformance();if(view==='history')loadHistory();if(view==='content')loadDaily(true);if(view==='evaluate')renderPaperGrid();if(view==='admin'){if(!state.admin){toast('Admin access नहीं है।');return;}$('adminFrame').src='/admin?embedded=1'}}
+function renderPaperGrid(){const papers=['GS1','GS2','GS3','GS4','GS5','GS6','GENERAL_HINDI','ESSAY'];$('paperGrid').innerHTML=papers.map(p=>`<button class="paper ${state.paper===p?'active':''}" onclick="selectPaper('${p}')">${p}</button>`).join('')}
+function selectPaper(p){state.paper=p;renderPaperGrid();$('mediumWrap').style.display=p==='ESSAY'?'block':'none';onEvaluationTypeChange()}
+async function loadDashboard(){try{const d=await api('/api/app/dashboard');setText('overallScore',(d.user?.average_percentage||0)+'%');setText('evalCount',d.user?.submissions||0);renderDaily(d)}catch(e){}}
+function renderDaily(d){if(!d?.recent?.length)return;}
+async function loadDaily(showContent=false){
+  try{
+    const d=await api('/api/app/daily?language='+(state.lang==='en'?'English':'Hindi'));
+    window._pranaDailyItems=d.items||[];
+    const langNow=state.lang==='en'?'English':'Hindi';
+    const papers=['ALL','GS1','GS2','GS3','GS4','GS5','GS6'];
+    const paper=state.dailyPaper||'ALL';
+    const items=window._pranaDailyItems.filter(x=>x.language===langNow&&(paper==='ALL'||x.paper===paper));
+    const filters=`<div class="daily-filters">${papers.map(x=>`<button class="${paper===x?'active':''}" onclick="setDailyPaper('${x}')">${x}</button>`).join('')}</div>`;
+    const langTabs=`<div class="daily-filters">${['Hindi','English'].map(x=>`<button class="${x===langNow?'active':''}" onclick="setDailyLanguage('${x}')">${x}</button>`).join('')}</div>`;
+    $('contentCard').innerHTML=filters+langTabs;
+    const x=items[0];
+    $('dailyCard').innerHTML=x?`<span class="badge">${esc(x.paper)}</span><div class="daily-q">${esc(x.question)}</div><div class="meta"><span>📝 Daily Question</span><span>•</span><span>${esc(x.language)}</span></div><div style="margin-top:9px"><button class="secondary" onclick="openDailyAnswer(${x.id})">📖 ${state.lang==='en'?'Model Answer':'Model Answer देखें'}</button></div>`:'<div class="muted">No daily question available.</div>';
+    $('dailyCount').textContent=items.length;
+    $('dailyList').innerHTML=items.map(x=>`<div class="card history-card"><div><span class="badge">${esc(x.paper)}</span><div class="daily-q" style="margin-top:6px">${esc(x.question)}</div></div><button class="secondary" onclick="openDailyAnswer(${x.id})">${state.lang==='en'?'Answer':'उत्तर'}</button></div>`).join('');
+  }catch(e){$('dailyCard').innerHTML='<div class="muted">No daily question available yet.</div>'}
+}
+function setDailyPaper(p){state.dailyPaper=p;loadDaily(true)}
+function setDailyLanguage(x){state.lang=x==='English'?'en':'hi';localStorage.setItem('prana_ui_lang',state.lang);applyLang();loadDaily(true)}
+function openDailyAnswer(id){
+  const x=(window._pranaDailyItems||[]).find(v=>Number(v.id)===Number(id))||{};state.dailyDate=x.content_date||x.date||'';
+  $('modalTitle').textContent=state.lang==='en'?'Model Answer':'मॉडल उत्तर';
+  $('modalBody').innerHTML=`<div class="badge">${esc(x.paper)}</div><h3>${esc(x.question)}</h3><div class="card feedback daily-answer" style="margin-top:12px">${x.model_answer||''}</div><div style="margin-top:12px"><button class="secondary" onclick="sendDailyPDF()">📨 Send Copy on Chat</button></div>`;
+  $('modal').classList.add('open');
+}
+function closeModal(){$('modal').classList.remove('open')}
+function filesChanged(e){state.files=Array.from(e.target.files||[]);renderFiles()}
+function renderFiles(){if(!state.files.length){$('fileList').innerHTML='';return}$('fileList').innerHTML=state.files.map((f,i)=>`<div class="file-row"><span>📄 ${esc(f.name)} <small class="muted">(${Math.round(f.size/1024)} KB)</small></span><button class="remove" onclick="removeFile(${i})">Remove</button></div>`).join('')}
+function removeFile(i){state.files.splice(i,1);renderFiles()}
+async function submitEvaluation(){
+  if(!state.files.length)return toast(state.lang==='en'?'Upload your copy first.':'पहले copy upload करें।');
+  if(state.files.length>12)return toast('Maximum 12 pages/files.');
+  $('submitBtn').disabled=true;$('submitBtn').textContent='⏳ Submitting…';
+  const fd=new FormData();state.files.forEach(f=>fd.append('files',f));
+  try{const d=await fetch('/api/app/evaluate?paper='+encodeURIComponent(state.paper)+'&exam='+encodeURIComponent($('examSelect').value)+'&evaluation_type='+encodeURIComponent($('evaluationType').value)+'&source_id='+encodeURIComponent($('sourceSelect').value||'')+'&medium='+encodeURIComponent(state.paper==='ESSAY'?($('mediumSelect').value||''):''),{method:'POST',body:fd});const r=await d.json();if(!d.ok||r.ok===false)throw new Error(r.error||'Upload failed');state.submission=r.submission_id;go('processing');pollStatus(r.submission_id)}catch(e){toast(e.message)}finally{$('submitBtn').disabled=false;$('submitBtn').textContent='🚀 Evaluate My Copy'}
+}
+async function pollStatus(id){let tries=0;const timer=setInterval(async()=>{tries++;try{const d=await api('/api/app/evaluation-status/'+encodeURIComponent(id));if(d.status==='completed'){clearInterval(timer);await loadResult(id);go('result')}else if(d.status==='failed'){clearInterval(timer);toast('Evaluation failed.');go('history')}}catch(e){if(tries>180){clearInterval(timer);toast('Status check timed out.')}}},2500)}
+async function loadResult(id){const d=await api('/api/app/evaluations/'+encodeURIComponent(id));state.result=d;setText('resultMarks',`${Number(d.submission.obtained||0).toString()} / ${Number(d.submission.max||0).toString()}`);setText('resultPct',`${d.submission.percentage}% · ${d.submission.language||'Language detected'}`);setText('resultLang',d.submission.language||'');$('feedback').textContent=d.submission.feedback||'';renderQuestions(d.questions||[]);renderDemand(d.questions||[]);}
+function renderQuestions(qs){$('qwise').innerHTML=qs.length?qs.map(q=>`<div class="barrow"><b>Q${q.number}</b><div class="bar"><i style="width:${Math.min(100,pct(q.obtained,q.max))}%"></i></div><b>${q.obtained}/${q.max}</b></div>`).join(''):'<div class="muted">Question-wise data unavailable.</div>'}
+function renderDemand(qs){const skipped=qs.flatMap(q=>q.skipped||[]);const fulfilled=qs.flatMap(q=>q.fulfilled||[]);$('demandBox').innerHTML=`<div class="muted" style="font-size:11px;margin-bottom:8px">Fulfilled</div><div class="chips">${(fulfilled.length?fulfilled:['—']).map(x=>`<span class="chip success">✓ ${esc(x)}</span>`).join('')}</div><div class="muted" style="font-size:11px;margin:14px 0 8px">Skipped / Needs improvement</div><div class="chips">${(skipped.length?skipped:['No major skipped demand detected']).map(x=>`<span class="chip ${skipped.length?'danger':''}">${skipped.length?'⚠':'✓'} ${esc(x)}</span>`).join('')}</div>`}
+async function sendEvaluatedCopy(){
+  if(!state.submission)return toast(state.lang==='en'?'Evaluation not ready.':'Evaluation अभी ready नहीं है।');
+  const btn=$('sendEvaluatedBtn');btn.disabled=true;btn.textContent='⏳ Sending…';
+  try{
+    const r=await fetch('/api/app/evaluations/'+encodeURIComponent(state.submission)+'/send-to-telegram',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||d.ok===false)throw new Error(d.error||'Send failed');
+    toast('✅ '+(d.message||'Copy Telegram chat में भेज दी गई है।'));
+  }catch(e){toast(e.message)}
+  finally{btn.disabled=false;btn.textContent=state.lang==='en'?'📨 Send Copy on Chat':'📨 Send Copy on Chat'}
+}
+async function sendDailyPDF(){try{const r=await fetch('/api/app/daily/send-pdf?language='+(state.lang==='en'?'English':'Hindi')+'&content_date='+encodeURIComponent(state.dailyDate||'')+'&paper='+(state.dailyPaper&&state.dailyPaper!=='ALL'?encodeURIComponent(state.dailyPaper):''),{method:'POST'});const d=await r.json().catch(()=>({}));if(!r.ok||d.ok===false)throw new Error(d.error||'Send failed');toast('✅ '+(d.message||'PDF sent to Telegram chat.'));}catch(e){toast(e.message)}}
+function toggleTheme(){state.theme=state.theme==='dark'?'light':'dark';localStorage.setItem('prana_theme',state.theme);applyTheme()}
+function applyTheme(){document.body.classList.toggle('dark',state.theme==='dark');document.body.classList.toggle('light',state.theme!=='dark');if($('themeToggle')){ $('themeToggle').textContent=state.theme==='dark'?'☀':'☾'; $('themeToggle').title=state.theme==='dark'?'Switch to light mode':'Switch to dark mode'; }}
+
+async function loadPerformance(){
+  try{
+    const d=await api('/api/app/dashboard');
+    setText('perfScore',(d.user?.average_percentage||0)+'%');
+    const ps=d.paper_stats||{};
+    $('paperBars').innerHTML=Object.keys(ps).length?Object.entries(ps).map(([k,v])=>`<div class="barrow"><b>${k}</b><div class="bar"><i style="width:${Math.min(100,v.percentage)}%"></i></div><b>${v.percentage}%</b></div>`).join(''):'<div class="muted">No evaluations yet.</div>';
+    const recent=d.recent||[];
+    $('trend').innerHTML=recent.length?recent.map(x=>`<div style="padding:9px 0;border-bottom:1px solid #2d323c;display:flex;justify-content:space-between"><span>${esc(x.paper)} · ${esc(x.language||'')}</span><b>${x.obtained}/${x.max}</b></div>`).join(''):'<div class="muted">No recent evaluations.</div>';
+    let mistakes=[], strengths=[];
+    for(const x of recent.slice(0,8)){
+      try{
+        const e=await api('/api/app/evaluations/'+encodeURIComponent(x.id));
+        (e.questions||[]).forEach(q=>{
+          if((q.skipped||[]).length) mistakes.push(`<b>${esc(x.paper)} Q${q.number}</b>: ${esc(q.skipped.join(', '))}`);
+          if(Number(q.obtained||0)>=Number(q.max||0)*0.75) strengths.push(`<b>${esc(x.paper)} Q${q.number}</b>: ${esc((q.fulfilled||[]).join(', ')||'Good coverage')}`);
+        });
+        (e.comments||[]).forEach(c=>{ if(c.color==='red') mistakes.push(`<b>Page ${c.page}</b>: ${esc(c.comment)}`); });
+      }catch(_){}
+    }
+    $('mistakesBox').innerHTML=mistakes.length?mistakes.slice(0,12).map(x=>`<div style="padding:9px 0;border-bottom:1px solid #2d323c">⚠️ ${x}</div>`).join(''):'<div class="muted">अभी पर्याप्त evaluation data नहीं है।</div>';
+    $('strengthsBox').innerHTML=strengths.length?strengths.slice(0,10).map(x=>`<div style="padding:9px 0;border-bottom:1px solid #2d323c">✅ ${x}</div>`).join(''):'<div class="muted">Strong areas data evaluation के साथ build होगा।</div>';
+    $('aiInputBox').innerHTML=`<div class="chips"><span class="chip">Question Demand</span><span class="chip">Fulfilled Components</span><span class="chip">Skipped Components</span><span class="chip">Page Annotations</span><span class="chip">Question-wise Marks</span><span class="chip">Overall Feedback</span><span class="chip">Model Answer Benchmark</span></div><p class="muted" style="margin-top:10px">Performance केवल marks average नहीं है; PRANA AI की evaluation inputs के आधार पर recurring mistakes और strengths दिखाए जाते हैं।</p>`;
+  }catch(e){}
+}
+function renderHistoryFilters(){const arr=['','GS1','GS2','GS3','GS4','GS5','GS6'];$('historyFilters').innerHTML=arr.map(p=>`<button class="paper ${state.historyPaper===p?'active':''}" onclick="state.historyPaper='${p}';renderHistoryFilters();loadHistory()">${p||'All'}</button>`).join('')}
+async function loadHistory(){try{const d=await api('/api/app/evaluations?limit=50'+(state.historyPaper?'&paper='+state.historyPaper:''));setText('historyCount',`${d.items.length} copies`);$('historyList').innerHTML=d.items.length?d.items.map(x=>`<button class="card history-card" onclick="openHistory('${x.id}')"><span style="text-align:left"><b>${esc(x.paper)} · ${esc(x.language||'')}</b><small>${new Date(x.created_at).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})}</small></span><span class="marks">${x.obtained}/${x.max}<br><small>${x.percentage}%</small></span></button>`).join(''):'<div class="card muted" style="text-align:center;padding:28px">No evaluations found.</div>'}catch(e){}}
+async function openHistory(id){try{const d=await api('/api/app/evaluations/'+encodeURIComponent(id));state.submission=id;state.result=d;loadResult(id);go('result')}catch(e){toast(e.message)}}
+
+applyLang();auth();
+</script>
+</body>
+</html>
