@@ -4848,17 +4848,64 @@ def app_user_payload(uid):
 @app.get("/app", response_class=HTMLResponse)
 @app.get("/miniapp", response_class=HTMLResponse)
 def student_mini_app():
-    html_path = STATIC_DIR / "branding" / "mini_app.html"
+    """
+    Serve the Telegram Mini App without depending on one fragile filesystem path.
 
-    if not html_path.exists():
+    Render normally runs the repository from /opt/render/project/src, but this
+    route also checks the current working directory and a few common static
+    locations.  This prevents a valid GitHub file from producing the generic
+    "Mini App build missing" 500 merely because the deployment path differs.
+    """
+    base_dir = Path(__file__).resolve().parent
+    cwd = Path.cwd()
+
+    candidates = [
+        base_dir / "static" / "branding" / "mini_app.html",
+        cwd / "static" / "branding" / "mini_app.html",
+        base_dir / "static" / "mini_app.html",
+        cwd / "static" / "mini_app.html",
+        base_dir / "branding" / "mini_app.html",
+        cwd / "branding" / "mini_app.html",
+        base_dir / "mini_app.html",
+        cwd / "mini_app.html",
+    ]
+
+    html_path = next((p for p in candidates if p.is_file()), None)
+
+    # Last-resort lookup for deployment files whose parent directory casing
+    # or layout differs from the expected path.
+    if html_path is None:
+        for root in (base_dir, cwd):
+            try:
+                matches = list(root.rglob("mini_app.html"))
+            except Exception:
+                matches = []
+            if matches:
+                html_path = next((p for p in matches if p.is_file()), None)
+                if html_path is not None:
+                    break
+
+    if html_path is None:
+        # Keep the failure informative instead of hiding the real deployment
+        # problem behind a generic 500 response.
         return HTMLResponse(
-            "Mini App build missing.",
-            status_code=500
+            "<h2>Mini App unavailable</h2>"
+            "<p>The Mini App file could not be found in this deployment.</p>"
+            "<p>Expected: static/branding/mini_app.html</p>",
+            status_code=404,
         )
 
-    return HTMLResponse(
-        html_path.read_text(encoding="utf-8")
-    )
+    try:
+        html = html_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        print("MINI APP READ ERROR:", repr(exc))
+        return HTMLResponse(
+            "<h2>Mini App unavailable</h2>"
+            "<p>The Mini App file was found but could not be read.</p>",
+            status_code=500,
+        )
+
+    return HTMLResponse(content=html, media_type="text/html")
 
 
 @app.post("/api/app/auth")
