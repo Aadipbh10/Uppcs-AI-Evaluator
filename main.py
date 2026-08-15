@@ -1940,15 +1940,15 @@ def make_marks_badge(
     total
 ):
 
-    fnt = font(50)
+    fnt = font(112)
 
     text = (
         f"Q{question_number}   "
         f"{obtained:g}/{total:g}"
     )
 
-    width = 650
-    height = 150
+    width = 760
+    height = 190
 
     image = Image.new(
         "RGB",
@@ -2889,8 +2889,8 @@ def place_comment(
 
     png = make_comment_badge(
         text,
-        width=1600,
-        font_size=92,
+        width=1700,
+        font_size=94,
         color=color
     )
 
@@ -2903,8 +2903,8 @@ def place_comment(
     )
 
     desired_w = min(
-        page_width * 0.31,
-        250
+        page_width * 0.34,
+        290
     )
 
     desired_h = (
@@ -3333,8 +3333,8 @@ def annotate_pdf(
                     emergency_png = (
                         make_comment_badge(
                             text,
-                            width=1300,
-                            font_size=88,
+                            width=1700,
+                            font_size=90,
                             color=color
                         )
                     )
@@ -3403,8 +3403,8 @@ def annotate_pdf(
                 )
 
                 marks_rect = fitz.Rect(
-                    page_width - 120,
-                    y - 30,
+                    page_width - 155,
+                    y - 44,
                     page_width - 5,
                     y
                 )
@@ -3415,7 +3415,7 @@ def annotate_pdf(
                     keep_proportion=True
                 )
 
-                y -= 36
+                y -= 50
 
         # ----------------------------------------------------
         # END PAGE QUESTION COMMENT
@@ -4183,7 +4183,7 @@ button,input,select,textarea{font:inherit}.top{position:sticky;top:0;z-index:20;
 <section id="users" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Student</h2><p style="color:#667085;margin-top:-8px">केवल Telegram User ID डालकर student जोड़ें और access तुरंत enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1fr auto"><input id="newStudentId" class="input" placeholder="Telegram User ID"><button class="btn green" onclick="addStudent()">➕ Add Student</button></div></div><div class="sectionhead"><div><h2>👥 Students / Users</h2><p style="color:#667085;margin-top:-8px">Access, submissions और individual performance manage करें।</p></div><div class="toolbar"><input id="userSearch" class="input search" placeholder="Telegram ID / name / username" oninput="filterUsers()"><button class="btn ghost" onclick="loadUsers()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>User</th><th>Status</th><th>Copies</th><th>Average</th><th>Last Seen</th><th>Access</th><th>Performance</th></tr></thead><tbody id="usersBody"></tbody></table></div></section>
 <section id="groups" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Telegram Group</h2><p style="color:#667085;margin-top:-8px">केवल Telegram Group ID डालकर group जोड़ें और access enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1fr auto"><input id="newGroupId" class="input" placeholder="Telegram Group ID (जैसे -100...)"><button class="btn green" onclick="addGroup()">➕ Add Group</button></div></div><div class="sectionhead"><div><h2>👥 Telegram Groups</h2><p style="color:#667085;margin-top:-8px">पूरे Telegram group को access दे या हटाएँ।</p></div><button class="btn ghost" onclick="loadGroups()">↻ Refresh</button></div><div class="tablewrap"><table class="table"><thead><tr><th>Group</th><th>Type</th><th>Status</th><th>Last Seen</th><th>Access</th></tr></thead><tbody id="groupsBody"></tbody></table></div></section>
 <section id="submissions" class="tabsec hidden"><div class="sectionhead"><div><h2>📄 Evaluated Copies</h2><p style="color:#667085;margin-top:-8px">हर evaluation की details, marks और PDF.</p></div><div class="toolbar"><select id="subPaper" class="input" onchange="loadSubmissions()"><option value="">All Papers</option><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><input id="subSearch" class="input search" placeholder="User ID / filename" oninput="filterSubs()"><button class="btn ghost" onclick="loadSubmissions()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>Date</th><th>User</th><th>Paper</th><th>Marks</th><th>Language</th><th>Filename</th><th>Actions</th></tr></thead><tbody id="subsBody"></tbody></table></div></section>
-<section id="content" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>📝 Daily Questions + Model Answers</h2><p style="color:#667085;margin-top:-8px">एक साथ जितने चाहें questions जोड़ें। कोई daily question limit नहीं।</p></div><div class="toolbar"><button class="btn blue" onclick="downloadContentPdf()">📥 Download All as Branded PDF</button><button class="btn ghost" onclick="addQuestionRow()">➕ Add Question</button></div></div><div id="bulkQuestions"></div><div class="toolbar" style="margin-top:12px"><button class="btn green" onclick="saveBulkContent()">💾 Save All Questions</button><button class="btn ghost" onclick="clearQuestionRows()">Clear Draft</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Created</th><th>Action</th></tr></thead><tbody id="contentBody"></tbody></table></div></section>
+<section id="content" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>📝 Daily Questions + Model Answers</h2><p style="color:#667085;margin-top:-8px">एक साथ जितने चाहें questions जोड़ें। कोई daily question limit नहीं।</p></div><div class="toolbar"><button class="btn blue" onclick="sendContentPdf()">📨 Send PDF on Chat</button><button class="btn ghost" onclick="addQuestionRow()">➕ Add Question</button></div></div><div id="bulkQuestions"></div><div class="toolbar" style="margin-top:12px"><button class="btn green" onclick="saveBulkContent()">💾 Save All Questions</button><button class="btn ghost" onclick="clearQuestionRows()">Clear Draft</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Created</th><th>Action</th></tr></thead><tbody id="contentBody"></tbody></table></div></section>
 <section id="admins" class="tabsec hidden"><div class="card"><h2>👑 Admin Management</h2><p>केवल Super Admin दूसरे Admin accounts जोड़/हटा सकता है।</p><div class="toolbar"><input id="adminId" class="input" placeholder="Telegram User ID"><button class="btn blue" onclick="addAdmin()">➕ Add Admin</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>Telegram ID</th><th>Role</th><th>Status</th><th>Last Login</th><th>Action</th></tr></thead><tbody id="adminsBody"></tbody></table></div></section>
 </div></div>
 <div id="modal" class="modal hidden" onclick="if(event.target===this)closeModal()"><div class="modalbox"><button class="btn gray close" onclick="closeModal()">Close</button><div id="modalBody"></div></div></div>
@@ -4217,7 +4217,14 @@ async function loadSubmissions(){try{let paper=subPaper.value;let d=await api('/
 async function submissionDetail(id){try{let d=await api('/api/admin/submissions/'+encodeURIComponent(id));let s=d.submission;modalBody.innerHTML=`<h2>📄 ${esc(s.paper)} Evaluation</h2><p><b>User:</b> ${esc(s.user)} · <b>Language:</b> ${esc(s.language||'-')} · <b>Marks:</b> ${esc(s.obtained)}/${esc(s.max)}</p><p><b>Original:</b> ${esc(s.original_filename||'-')}<br><b>Evaluated:</b> ${esc(s.filename||'-')}</p><div class="card"><b>Overall Feedback</b><p>${esc(s.feedback||'-')}</p></div><h3>Question-wise</h3><div class="tablewrap"><table class="table"><thead><tr><th>Q</th><th>Pages</th><th>Marks</th><th>Demand</th><th>Skipped</th><th>Comment</th></tr></thead><tbody>${(d.questions||[]).map(q=>`<tr><td>${q.number}</td><td>${q.start_page}-${q.end_page}</td><td>${q.obtained}/${q.max}</td><td>${esc((q.fulfilled||[]).join(' • '))}</td><td>${esc((q.skipped||[]).join(' • ')||'—')}</td><td>${esc(q.comment||'')}</td></tr>`).join('')}</tbody></table></div><h3>Examiner Comments / Annotations</h3><div>${(d.comments||[]).map(c=>`<div style="padding:8px;border-bottom:1px solid #eee"><b>Page ${c.page}</b> · ${esc(c.color||'red')}<br>${esc(c.comment)}</div>`).join('')||'<div class="empty">No comments</div>'}</div><div style="margin-top:15px"><button class="btn blue" onclick="pdf('${esc(id)}')">Open Evaluated PDF</button></div>`;modal.classList.remove('hidden')}catch(e){alert(e.message)}}
 async function pdf(id){let r=await fetch('/api/admin/submissions/'+encodeURIComponent(id)+'/pdf');if(!r.ok)return alert('PDF access denied');let b=await r.blob(),u=URL.createObjectURL(b);window.open(u,'_blank')}
 async function loadContent(){try{let d=await api('/api/admin/content');contentBody.innerHTML=(d.items||[]).map(x=>`<tr><td>${x.id}</td><td>${esc(x.paper)}</td><td>${esc(x.language)}</td><td>${esc(x.question).slice(0,260)}</td><td>${fmtDate(x.created_at)}</td><td><button class="btn red" onclick="deleteContent(${x.id})">Delete</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">अभी कोई daily content नहीं है।</td></tr>'}catch(e){alert(e.message)}}
-function downloadContentPdf(){window.open('/api/admin/content/pdf','_blank')}
+async function sendContentPdf(){
+  try{
+    let r=await fetch('/api/admin/content/send-pdf',{method:'POST'});
+    let d=await r.json().catch(()=>({}));
+    if(!r.ok||d.ok===false)throw Error(d.error||'PDF send failed');
+    alert('✅ '+(d.message||'Branded PDF sent to your Telegram chat.'));
+  }catch(e){alert(e.message)}
+}
 function richCmd(btn,cmd){const ed=btn.closest('.bulk-q-row').querySelector('.bulk-answer');ed.focus();document.execCommand(cmd,false,null)}
 function insertTable(btn){const ed=btn.closest('.bulk-q-row').querySelector('.bulk-answer');ed.focus();document.execCommand('insertHTML',false,'<table border="1" style="border-collapse:collapse;width:100%"><tr><th>Heading</th><th>Heading</th></tr><tr><td>Cell</td><td>Cell</td></tr></table><p><br></p>')}
 function addQuestionRow(data={}){const box=document.getElementById('bulkQuestions');const row=document.createElement('div');row.className='card bulk-q-row';row.style.cssText='margin-top:10px;border:1px solid #dbe2ea';row.innerHTML=`<div class="toolbar" style="margin-bottom:8px"><b>Question #${box.children.length+1}</b><button class="btn red" style="margin-left:auto" onclick="this.closest('.bulk-q-row').remove();renumberRows()">Remove</button></div><div class="formgrid" style="grid-template-columns:140px 140px 1fr"><select class="input bulk-paper"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><select class="input bulk-lang"><option>Hindi</option><option>English</option></select><textarea class="input bulk-question" rows="4" placeholder="Daily Question"></textarea></div><div class="rich-toolbar" style="margin-top:8px"><button type="button" class="btn ghost" onclick="richCmd(this,'bold')"><b>B</b></button><button type="button" class="btn ghost" onclick="richCmd(this,'italic')"><i>I</i></button><button type="button" class="btn ghost" onclick="richCmd(this,'insertUnorderedList')">• List</button><button type="button" class="btn ghost" onclick="richCmd(this,'insertOrderedList')">1. List</button><button type="button" class="btn ghost" onclick="insertTable(this)">▦ Table</button></div><div class="input bulk-answer" contenteditable="true" style="width:100%;min-height:180px;margin-top:6px;line-height:1.5" data-placeholder="Model Answer — rich text / table support"></div>`;box.appendChild(row);row.querySelector('.bulk-paper').value=data.paper||'GS1';row.querySelector('.bulk-lang').value=data.language||'Hindi';row.querySelector('.bulk-question').value=data.question||'';row.querySelector('.bulk-answer').innerHTML=data.model_answer||'';renumberRows()}
@@ -4534,6 +4541,38 @@ def build_daily_content_pdf(rows, language):
         if not more: break
     out=io.BytesIO(); writer.save(out,garbage=4,deflate=True); writer.close()
     return out.getvalue()
+
+
+@app.post("/api/admin/content/send-pdf")
+def admin_content_send_pdf(request: Request, language: str = ""):
+    admin = current_admin(request)
+    if not admin:
+        return admin_denied()
+    if not bot:
+        return app_error("Telegram bot is not configured.", 500)
+    ensure_admin_content_table()
+    lang = str(language or "").strip()
+    with engine.connect() as conn:
+        if lang:
+            rows = conn.exec_driver_sql(
+                "SELECT id,paper,language,question,model_answer,created_at FROM daily_content WHERE is_active=TRUE AND language=%s ORDER BY id ASC",
+                (lang,)
+            ).mappings().all()
+        else:
+            rows = conn.exec_driver_sql(
+                "SELECT id,paper,language,question,model_answer,created_at FROM daily_content WHERE is_active=TRUE ORDER BY id ASC"
+            ).mappings().all()
+    if not rows:
+        return app_error("कोई Daily Question उपलब्ध नहीं है।", 404)
+    try:
+        out = build_daily_content_pdf(rows, lang or "Hindi/English")
+        bio = io.BytesIO(out)
+        bio.name = "PRANA_PCS_Daily_Questions_Model_Answers.pdf"
+        bot.send_document(str(admin["id"]), bio, caption="📚 <b>PRANA PCS Mains AI</b>\nDaily Questions + Model Answers")
+        return {"ok": True, "message": "Branded PDF आपके Telegram chat में भेज दी गई है।"}
+    except Exception as e:
+        print("ADMIN CONTENT PDF SEND ERROR:", e)
+        return app_error("PDF send failed: " + str(e), 500)
 
 
 @app.post("/api/app/daily/send-pdf")
