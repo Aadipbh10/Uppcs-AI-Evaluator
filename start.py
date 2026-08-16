@@ -7,6 +7,7 @@ import html
 import json
 import os
 import time
+import threading
 from urllib.parse import parse_qs
 
 import requests
@@ -16,7 +17,6 @@ from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import desc
 
 # main.py is a large legacy module whose later sections use these names.
-# Expose them before importing it so the production entrypoint is resilient.
 builtins.base64 = base64
 builtins.hashlib = hashlib
 builtins.hmac = hmac
@@ -31,16 +31,31 @@ builtins.desc = desc
 
 import main
 
-# Telegram Mini App authentication compatibility layer.
-# Standard bot-token HMAC validation remains the primary path. Telegram now
-# also provides an Ed25519 `signature`; use it as a standards-compliant
-# fallback so newer Mini App payloads remain verifiable.
+# Telegram Mini App public key for the Ed25519 signature validation path.
 _PROD_TELEGRAM_WEBAPP_PUBLIC_KEY = bytes.fromhex(
     "e7bf03a2fa4602af4580703d88dda5bb59f32ed8b02a56c187fe7d34caed242d"
 )
 
 
+def _check_string(values, exclude_signature=False):
+    """Build Telegram's sorted data-check-string from parsed initData."""
+    keys = []
+    for key in values:
+        if key == "hash" or (exclude_signature and key == "signature"):
+            continue
+        keys.append(key)
+    return "\n".join(f"{key}={values[key][0]}" for key in sorted(keys))
+
+
 def robust_telegram_webapp_validate(init_data: str):
+    """Strictly validate Telegram Mini App initData.
+
+    HMAC validation is primary. When Telegram supplies the newer Ed25519
+    signature, it is verified using Telegram's published public key. The two
+    schemes intentionally use different exclusion rules:
+      - HMAC: exclude only `hash`.
+      - Ed25519: exclude both `hash` and `signature`.
+    """
     if not main.BOT_TOKEN or not init_data:
         print("MINI APP AUTH FAIL: missing bot token or initData")
         return None
@@ -52,9 +67,9 @@ def robust_telegram_webapp_validate(init_data: str):
         if not auth_date:
             print("MINI APP AUTH FAIL: auth_date missing")
             return None
-        age = abs(int(time.time()) - auth_date)
-        if age > 86400:
-            print(f"MINI APP AUTH FAIL: auth_date expired age={age}s")
+        age = int(time.time()) - auth_date
+        if age < -300 or age > 86400:
+            print(f"MINI APP AUTH FAIL: auth_date invalid age={age}s")
             return None
 
         user_raw = values.get("user", [""])[0]
@@ -62,28 +77,21 @@ def robust_telegram_webapp_validate(init_data: str):
             print("MINI APP AUTH FAIL: user missing")
             return None
 
-        # Primary Telegram bot-token validation.
-        hmac_values = dict(values)
-        hmac_values.pop("hash", None)
-        hmac_values.pop("signature", None)
-        data_check_string = "\n".join(
-            f"{key}={hmac_values[key][0]}" for key in sorted(hmac_values.keys())
-        )
+        # Telegram HMAC: all received fields except `hash` participate.
+        hmac_check = _check_string(values, exclude_signature=False)
         secret_key = hmac.new(
             b"WebAppData", main.BOT_TOKEN.encode(), hashlib.sha256
         ).digest()
         calculated = hmac.new(
-            secret_key, data_check_string.encode(), hashlib.sha256
+            secret_key, hmac_check.encode(), hashlib.sha256
         ).hexdigest()
-
         valid = bool(received_hash) and hmac.compare_digest(calculated, received_hash)
 
-        # New Telegram Ed25519 signature fallback. This is intentionally only
-        # used when the normal hash check fails; no unsigned data is accepted.
+        # Telegram Ed25519: exclude both hash and signature.
         if not valid and received_signature:
             try:
                 bot_id = main.BOT_TOKEN.split(":", 1)[0]
-                signature_check = f"{bot_id}:WebAppData\n" + data_check_string
+                signature_check = f"{bot_id}:WebAppData\n" + _check_string(values, exclude_signature=True)
                 signature_bytes = base64.urlsafe_b64decode(
                     received_signature + "=" * (-len(received_signature) % 4)
                 )
@@ -121,8 +129,7 @@ def robust_telegram_webapp_validate(init_data: str):
 
 main.telegram_webapp_validate = robust_telegram_webapp_validate
 
-# Prevent an unavailable/unreachable DB from turning Mini App authentication
-# into an opaque HTTP 500. Evaluation remains access-controlled server-side.
+# Protect Mini App profile rendering from detached/unavailable DB failures.
 _original_app_user_payload = main.app_user_payload
 
 def safe_app_user_payload(uid):
@@ -131,17 +138,14 @@ def safe_app_user_payload(uid):
     except Exception as exc:
         print("MINI APP USER PAYLOAD ERROR:", repr(exc))
         return {
-            "id": str(uid),
-            "name": "Student",
-            "username": None,
-            "submissions": 0,
-            "obtained": 0,
-            "max": 0,
+            "id": str(uid), "name": "Student", "username": None,
+            "submissions": 0, "obtained": 0, "max": 0,
             "average_percentage": 0,
         }
 
 main.app_user_payload = safe_app_user_payload
 
+# Make evaluation workers fast and use the same models everywhere.
 main.MODELS = ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
 
 def fast_image_pages_from_pdf(pdf):
@@ -197,10 +201,30 @@ def fast_call_gemini(images, paper, evaluation_type="GENERAL", source_id=None, e
 main.call_gemini = fast_call_gemini
 main.EVALUATION_STALE_SECONDS = 10 * 60
 
+# Cloud Run request-based instances can throttle background work after the
+# HTTP response. main.app_evaluate already schedules run_webapp_evaluation as
+# a Starlette BackgroundTask; this wrapper immediately hands the heavy work to
+# a daemon thread so the HTTP request itself stays short.
+_original_run_webapp_evaluation = main.run_webapp_evaluation
+
+def threaded_run_webapp_evaluation(*args, **kwargs):
+    t = threading.Thread(
+        target=_original_run_webapp_evaluation,
+        args=args,
+        kwargs=kwargs,
+        daemon=True,
+        name="prana-evaluation-worker",
+    )
+    t.start()
+    print("MINI APP EVALUATION WORKER STARTED:", args[0] if args else "unknown")
+
+main.run_webapp_evaluation = threaded_run_webapp_evaluation
+
 @main.app.get("/api/health")
 def health_check():
     return {
         "ok": True,
+        "runtime": "google-cloud-run",
         "database_configured": bool(main.DB_ENABLED and main.SessionLocal is not None),
         "telegram_bot_configured": bool(main.bot),
         "gemini_configured": bool(main.GEMINI_API_KEY),
