@@ -6160,6 +6160,26 @@ async def app_evaluate(
     }
 
 
+# A background evaluation should never leave the Mini App waiting forever.
+# If a worker restarts, crashes, or Gemini hangs beyond a sane ceiling, the
+# submission would otherwise stay stuck at status="processing" indefinitely
+# with no failure ever recorded (this was reported as "no reply after 15+
+# minutes"). This watchdog converts a stale "processing" row into a clear,
+# retryable "failed" state as soon as it is next queried, instead of leaving
+# the user staring at a spinner with no explanation.
+EVALUATION_STALE_SECONDS = 8 * 60  # 8 minutes covers up to 4 model retries at 90s each
+
+
+def _mark_stale_submission_failed(session, row):
+    row.status = "failed"
+    row.overall_feedback = (
+        "AI response में समय से अधिक देरी हो गई (timeout)। कृपया दोबारा evaluate करें। / "
+        "The AI took too long to respond (timeout). Please try evaluating again."
+    )
+    row.completed_at = _utcnow()
+    session.commit()
+
+
 @app.get("/api/app/evaluation-status/{submission_id}")
 def app_evaluation_status(submission_id: str, request: Request):
     uid = require_app_user(request)
@@ -6170,6 +6190,13 @@ def app_evaluation_status(submission_id: str, request: Request):
         row = session.get(DBSubmission, submission_id)
         if not row or row.telegram_user_id != uid:
             return app_error("Evaluation not found", 404)
+        if row.status == "processing" and row.created_at:
+            created_at = row.created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            elapsed = (_utcnow() - created_at).total_seconds()
+            if elapsed > EVALUATION_STALE_SECONDS:
+                _mark_stale_submission_failed(session, row)
         return {
             "ok": True,
             "id": row.id,
@@ -6181,6 +6208,7 @@ def app_evaluation_status(submission_id: str, request: Request):
             "language": row.copy_language,
             "obtained": row.total_obtained_marks,
             "max": row.total_max_marks,
+            "feedback": row.overall_feedback,
         }
     finally:
         session.close()
