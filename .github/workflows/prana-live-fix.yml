@@ -1,0 +1,222 @@
+name: Prana Live Fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch main.py
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('main.py')
+          s = p.read_text(encoding='utf-8')
+
+          # 1) Replace Telegram access gate with the same user/group/admin gate used by Mini App.
+          pattern = r'def telegram_chat_access_allowed\(message\):.*?(?=\n\nif bot:\n\n    @bot\.message_handler\(\n        content_types=\[\n            "document",\n            "photo"\n        \]\n    \)\n    def receive_copy)'
+          replacement = '''def telegram_chat_access_allowed(message):
+              """Unified access gate shared by Mini App and Telegram direct chat."""
+              if not DB_ENABLED or SessionLocal is None:
+                  return False, "database_unavailable"
+              uid = str(getattr(getattr(message, "from_user", None), "id", ""))
+              chat = getattr(message, "chat", None)
+              chat_id = str(getattr(chat, "id", ""))
+              chat_type = getattr(chat, "type", None)
+              session = SessionLocal()
+              allowed_groups = []
+              try:
+                  user = session.get(DBUser, uid) if uid else None
+                  if user and user.is_blocked:
+                      return False, "blocked"
+
+                  if SUPER_ADMIN_TELEGRAM_ID and uid == SUPER_ADMIN_TELEGRAM_ID:
+                      if user:
+                          user.is_allowed = True
+                          user.access_type = "full"
+                          session.commit()
+                      return True, "full"
+
+                  is_admin = uid in ADMIN_TELEGRAM_IDS
+                  if not is_admin:
+                      try:
+                          row = session.execute(__import__("sqlalchemy").text(
+                              "SELECT role FROM admin_users WHERE telegram_user_id=:uid AND is_active=TRUE LIMIT 1"
+                          ), {"uid": uid}).mappings().first()
+                          is_admin = bool(row and str(row.get("role", "")).lower() in ("admin", "super_admin"))
+                      except Exception:
+                          is_admin = False
+                  if is_admin:
+                      if user:
+                          user.is_allowed = True
+                          user.access_type = "full"
+                          session.commit()
+                      return True, "full"
+
+                  if user and (user.is_allowed or user.access_type in ("full", "trial")):
+                      if user.access_type == "trial":
+                          if int(user.trial_copies_used or 0) >= int(user.trial_copies_limit or 3):
+                              return False, "trial_copies_exhausted"
+                          if int(user.trial_questions_used or 0) >= int(user.trial_questions_limit or 10):
+                              return False, "trial_questions_exhausted"
+                          return True, "trial"
+                      return True, "full"
+
+                  if chat_type in ("group", "supergroup") and chat_id:
+                      group = session.get(DBGroup, chat_id)
+                      if group and group.is_allowed and not group.is_blocked:
+                          return True, "group"
+
+                  allowed_groups = session.query(DBGroup).filter(
+                      DBGroup.is_allowed == True,
+                      DBGroup.is_blocked == False
+                  ).all()
+              except Exception as e:
+                  print("UNIFIED TELEGRAM ACCESS ERROR:", e)
+                  session.rollback()
+                  return False, "database_error"
+              finally:
+                  session.close()
+
+              if not bot or not uid:
+                  return False, "not_authorized"
+              for group in allowed_groups:
+                  try:
+                      member = bot.get_chat_member(int(group.telegram_group_id), int(uid))
+                      status = str(getattr(member, "status", ""))
+                      is_member = bool(getattr(member, "is_member", False))
+                      if status in ("creator", "administrator", "member") or (status == "restricted" and is_member):
+                          return True, "group"
+                  except Exception:
+                      continue
+              return False, "not_authorized"
+          '''
+          s2, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+          if n != 1:
+              raise SystemExit('access gate pattern not found')
+          s = s2
+
+          # 2) Add result/PDF/Mini App buttons to the evaluated PDF message.
+          old = '''            bot.send_document(
+                chat_id,
+                final_pdf,
+                visible_file_name=evaluated_filename,
+                caption=caption
+            )'''
+          new = '''            reply_markup = None
+            try:
+                s_btn = SessionLocal()
+                latest = s_btn.query(DBSubmission).filter(
+                    DBSubmission.telegram_user_id == str(message.from_user.id),
+                    DBSubmission.status == "completed"
+                ).order_by(desc(DBSubmission.created_at)).first()
+                s_btn.close()
+                if latest:
+                    reply_markup = telebot.types.InlineKeyboardMarkup(row_width=2)
+                    reply_markup.add(
+                        telebot.types.InlineKeyboardButton("📊 View Result", callback_data=f"prana_result:{latest.id}"),
+                        telebot.types.InlineKeyboardButton("📄 Send PDF Again", callback_data=f"prana_pdf:{latest.id}")
+                    )
+                    reply_markup.add(
+                        telebot.types.InlineKeyboardButton("📱 Open Mini App", web_app=telebot.types.WebAppInfo(url=f"{PUBLIC_BASE_URL}/app")),
+                        telebot.types.InlineKeyboardButton("📈 Performance", web_app=telebot.types.WebAppInfo(url=f"{PUBLIC_BASE_URL}/app?view=performance"))
+                    )
+            except Exception as e:
+                print("TELEGRAM RESULT BUTTON BUILD ERROR:", e)
+
+            bot.send_document(
+                chat_id,
+                final_pdf,
+                visible_file_name=evaluated_filename,
+                caption=caption,
+                reply_markup=reply_markup
+            )'''
+          if old not in s:
+              raise SystemExit('send_document block not found')
+          s = s.replace(old, new, 1)
+
+          # 3) Add callbacks before database health routes.
+          marker = '\n# ============================================================\n# DATABASE HEALTH / STATISTICS API\n'
+          callbacks = '''
+
+# ============================================================
+# TELEGRAM EVALUATION RESULT BUTTONS
+# ============================================================
+if bot:
+    @bot.callback_query_handler(func=lambda call: str(call.data or "").startswith("prana_result:"))
+    def prana_result_button(call):
+        try:
+            sid = str(call.data.split(":", 1)[1])
+            s = SessionLocal()
+            try:
+                sub = s.get(DBSubmission, sid)
+                if not sub or str(sub.telegram_user_id) != str(call.from_user.id):
+                    bot.answer_callback_query(call.id, "Evaluation not found.", show_alert=True)
+                    return
+                pct = (float(sub.total_obtained_marks or 0) / float(sub.total_max_marks or 1) * 100) if sub.total_max_marks else 0
+                text = (f"📊 <b>PRANA PCS AI Evaluation</b>\\n\\n"
+                        f"<b>Exam:</b> {getattr(sub, 'exam', None) or 'UPPCS'}\\n"
+                        f"<b>Paper:</b> {sub.paper}\\n"
+                        f"<b>Marks:</b> {float(sub.total_obtained_marks or 0):g} / {float(sub.total_max_marks or 0):g}\\n"
+                        f"<b>Percentage:</b> {pct:.1f}%\\n\\n"
+                        f"{str(sub.overall_feedback or '').strip()}")
+            finally:
+                s.close()
+            bot.answer_callback_query(call.id)
+            bot.send_message(call.message.chat.id, text[:4000])
+        except Exception as e:
+            print("PRANA RESULT BUTTON ERROR:", e)
+            bot.answer_callback_query(call.id, "Unable to load result.", show_alert=True)
+
+    @bot.callback_query_handler(func=lambda call: str(call.data or "").startswith("prana_pdf:"))
+    def prana_pdf_button(call):
+        try:
+            sid = str(call.data.split(":", 1)[1])
+            s = SessionLocal()
+            try:
+                sub = s.get(DBSubmission, sid)
+                f = s.get(DBSubmissionPDF, sid)
+                if not sub or str(sub.telegram_user_id) != str(call.from_user.id) or not f:
+                    bot.answer_callback_query(call.id, "PDF not found.", show_alert=True)
+                    return
+                bio = io.BytesIO(bytes(f.pdf_bytes))
+                bio.name = Path(sub.evaluated_filename).name
+            finally:
+                s.close()
+            bot.answer_callback_query(call.id)
+            bot.send_document(call.message.chat.id, bio, caption="📄 PRANA PCS AI Evaluated Copy")
+        except Exception as e:
+            print("PRANA PDF BUTTON ERROR:", e)
+            bot.answer_callback_query(call.id, "Unable to send PDF.", show_alert=True)
+'''
+          if 'def prana_result_button(call):' not in s:
+              if marker not in s:
+                  raise SystemExit('database health marker not found')
+              s = s.replace(marker, callbacks + marker, 1)
+
+          p.write_text(s, encoding='utf-8')
+          print('patched', len(s.splitlines()), 'lines')
+          PY
+
+      - name: Syntax check
+        run: python -m py_compile main.py
+
+      - name: Commit patch and remove workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add main.py
+          git rm .github/workflows/prana-live-fix.yml
+          git commit -m 'fix: unify Telegram evaluation with Mini App access and results'
+          git push
