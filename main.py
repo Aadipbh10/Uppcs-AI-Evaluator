@@ -334,7 +334,8 @@ def get_content_reference(evaluation_type, source_id=None, paper=None, exam='UPP
             if source_id:
                 rows=conn.exec_driver_sql("""SELECT cs.id,cs.rubric,ci.question_number,ci.question,ci.model_answer
                     FROM content_sets cs JOIN content_items ci ON ci.set_id=cs.id
-                    WHERE cs.id=%s AND cs.is_active=TRUE ORDER BY ci.question_number""",(str(source_id),)).mappings().all()
+                    WHERE cs.id=%s AND cs.content_type=%s AND cs.exam=%s AND cs.paper=%s AND cs.is_active=TRUE
+                    ORDER BY ci.question_number""",(str(source_id),ctype,exam,paper)).mappings().all()
             else:
                 rows=conn.exec_driver_sql("""SELECT cs.id,cs.rubric,ci.question_number,ci.question,ci.model_answer
                     FROM content_sets cs JOIN content_items ci ON ci.set_id=cs.id
@@ -4227,6 +4228,20 @@ def api_health():
     return get_database_summary()
 
 
+@app.get("/api/health/db")
+def api_health_db():
+    """Explicit PostgreSQL/Supabase connectivity check for Cloud Run smoke tests."""
+    if not DB_ENABLED or engine is None:
+        return {"ok": False, "database": "disabled", "error": "DATABASE_URL is not configured."}
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+        return {"ok": True}
+    except Exception as e:
+        print("DATABASE HEALTH ERROR:", repr(e))
+        return {"ok": False, "error": str(e)[:500]}
+
+
 @app.get("/api/stats")
 def api_stats():
     if not DB_ENABLED or SessionLocal is None:
@@ -4460,12 +4475,9 @@ button,input,select,textarea{font:inherit}.top{position:sticky;top:0;z-index:20;
 <section id="users" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Student</h2><p style="color:#667085;margin-top:-8px">केवल Telegram User ID डालकर student जोड़ें और access तुरंत enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1fr auto"><input id="newStudentId" class="input" placeholder="Telegram User ID"><select id="newStudentAccess" class="input"><option value="full">Full Access</option><option value="trial">Trial — 3 copies / 10 questions</option><option value="none">No Evaluation Access</option></select><button class="btn green" onclick="addStudent()">➕ Add Student</button></div></div><div class="sectionhead"><div><h2>👥 Students / Users</h2><p style="color:#667085;margin-top:-8px">Access, submissions और individual performance manage करें।</p></div><div class="toolbar"><input id="userSearch" class="input search" placeholder="Telegram ID / name / username" oninput="filterUsers()"><button class="btn ghost" onclick="loadUsers()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>User</th><th>Status</th><th>Copies</th><th>Average</th><th>Last Seen</th><th>Access</th><th>Performance</th></tr></thead><tbody id="usersBody"></tbody></table></div></section>
 <section id="groups" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Telegram Group</h2><p style="color:#667085;margin-top:-8px">केवल Telegram Group ID डालकर group जोड़ें और access enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1fr auto"><input id="newGroupId" class="input" placeholder="Telegram Group ID (जैसे -100...)"><button class="btn green" onclick="addGroup()">➕ Add Group</button></div></div><div class="sectionhead"><div><h2>👥 Telegram Groups</h2><p style="color:#667085;margin-top:-8px">पूरे Telegram group को access दे या हटाएँ।</p></div><button class="btn ghost" onclick="loadGroups()">↻ Refresh</button></div><div class="tablewrap"><table class="table"><thead><tr><th>Group</th><th>Type</th><th>Status</th><th>Last Seen</th><th>Access</th></tr></thead><tbody id="groupsBody"></tbody></table></div></section>
 <section id="submissions" class="tabsec hidden"><div class="sectionhead"><div><h2>📄 Evaluated Copies</h2><p style="color:#667085;margin-top:-8px">हर evaluation की details, marks और PDF.</p></div><div class="toolbar"><select id="subPaper" class="input" onchange="loadSubmissions()"><option value="">All Papers</option><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><input id="subSearch" class="input search" placeholder="User ID / filename" oninput="filterSubs()"><button class="btn ghost" onclick="loadSubmissions()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>Date</th><th>User</th><th>Paper</th><th>Marks</th><th>Language</th><th>Filename</th><th>Actions</th></tr></thead><tbody id="subsBody"></tbody></table></div></section>
-<section id="content" class="tabsec hidden"><div class="card" style="border:2px solid #dbe7ff"><h2>📥 Daily Questions — Q&A Parser + Rubric</h2><p style="color:#667085">एक upload में Q1./ANS1., Q2./ANS2. ... डालें। दूसरे option से Rubric upload करें। Hindi और English अलग save होंगे।</p><div class="formgrid"><input id="dqDate" class="input" type="date"><select id="dqLang" class="input"><option>Hindi</option><option>English</option></select><select id="dqPaper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option><option>GENERAL_HINDI</option><option>ESSAY</option></select></div><input id="dqFile" class="input" type="file" accept=".txt,.text,.md"><textarea id="dqText" class="input" rows="10" placeholder="या text paste करें: Q1. ...
-ANS1. ...
-
-Q2. ...
-ANS2. ..."></textarea><input id="dqRubricFile" class="input" type="file" accept=".txt,.text,.md"><textarea id="dqRubric" class="input" rows="5" placeholder="Rubric (optional now, can update later)"></textarea><div class="toolbar"><button class="btn blue" onclick="uploadDQ()">Upload Questions + Model Answers</button><button class="btn ghost" onclick="uploadDQRubric()">Upload Rubric</button><button class="btn green" onclick="sendDQ()">📨 Send DQ PDF on Chat</button></div><small id="dqStatus" style="color:#667085"></small></div><div class="card"><div class="sectionhead"><div><h2>📝 Daily Questions + Model Answers</h2><p style="color:#667085;margin-top:-8px">एक साथ जितने चाहें questions जोड़ें। कोई daily question limit नहीं।</p></div><div class="toolbar"><button class="btn blue" onclick="sendContentPdf()">📨 Send PDF on Chat</button><button class="btn ghost" onclick="addQuestionRow()">➕ Add Question</button></div></div><div id="bulkQuestions"></div><div class="toolbar" style="margin-top:12px"><button class="btn green" onclick="saveBulkContent()">💾 Save All Questions</button><button class="btn ghost" onclick="clearQuestionRows()">Clear Draft</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Created</th><th>Action</th></tr></thead><tbody id="contentBody"></tbody></table></div></section>
-<section id="pyqs" class="tabsec hidden"><div class="card" style="border:2px solid #dbe7ff"><h2>📚 PYQ Upload</h2><p style="color:#667085">Q1./ANS1. format में paper upload करें। केवल uploaded papers पर evaluation उपलब्ध होगा। Rubric अलग upload होगा।</p><div class="formgrid"><select id="pyqExam" class="input"><option value="UPPCS">UPPCS</option><option value="BPSC">BPSC</option><option value="RO_ARO">RO/ARO</option><option value="BEO">BEO</option></select><input id="pyqYear" class="input" type="number" placeholder="Year"><select id="pyqPaper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option><option>GENERAL_HINDI</option><option>ESSAY</option></select><select id="pyqLang" class="input"><option>Hindi</option><option>English</option></select></div><label>Questions + Model Answers</label><input id="pyqFile" class="input" type="file" accept=".txt,.text,.md"><textarea id="pyqText" class="input" rows="8" placeholder="या text paste करें: Q1. ... ANS1. ..."></textarea><label>Rubric</label><input id="pyqRubricFile" class="input" type="file" accept=".txt,.text,.md"><textarea id="pyqRubric" class="input" rows="4" placeholder="या rubric paste करें"></textarea><div class="toolbar"><button class="btn blue" onclick="uploadPYQ()">Upload Questions + Model Answers</button><button class="btn ghost" onclick="uploadPYQRubric()">Upload Rubric</button></div><small id="pyqStatus" style="color:#667085"></small></div><div class="section tablewrap"><table class="table"><thead><tr><th>Exam</th><th>Year</th><th>Paper</th><th>Language</th><th>Questions</th><th>Action</th></tr></thead><tbody id="pyqBody"></tbody></table></div></section><section id="admins" class="tabsec hidden"><div class="card"><h2>👑 Admin Management</h2><p>केवल Super Admin दूसरे Admin accounts जोड़/हटा सकता है।</p><div class="toolbar"><input id="adminId" class="input" placeholder="Telegram User ID"><button class="btn blue" onclick="addAdmin()">➕ Add Admin</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>Telegram ID</th><th>Role</th><th>Status</th><th>Last Login</th><th>Action</th></tr></thead><tbody id="adminsBody"></tbody></table></div></section>
+<section id="content" class="tabsec hidden"><div class="card" style="border:2px solid #dbe7ff"><h2>📥 Daily Questions — Questions + Model Answers + Rubric</h2><p style="color:#667085">Questions + Model Answers एक file में Q1./ANS1., Q2./ANS2. ... format में upload करें। Parser automatically question और answer अलग करेगा। Hindi और English date-wise अलग रहेंगे।</p><div class="formgrid"><input id="dqDate" class="input" type="date"><select id="dqLang" class="input"><option>Hindi</option><option>English</option></select><select id="dqPaper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option><option>GENERAL_HINDI</option><option>ESSAY</option></select></div><label>1️⃣ Questions + Model Answers</label><input id="dqFile" class="input" type="file" accept=".txt,.text,.md" required><label style="display:block;margin-top:10px">2️⃣ Rubric</label><input id="dqRubricFile" class="input" type="file" accept=".txt,.text,.md" required><div class="toolbar" style="margin-top:10px"><button class="btn blue" onclick="uploadDQ()">💾 Save Daily Questions + Rubric</button><button class="btn green" onclick="sendDQ()">📨 Send DQ PDF on Chat</button></div><small id="dqStatus" style="color:#667085"></small></div><div class="card"><div class="sectionhead"><div><h2>📝 Daily Questions + Model Answers</h2><p style="color:#667085;margin-top:-8px">Manual bulk entry भी उपलब्ध है।</p></div><div class="toolbar"><button class="btn blue" onclick="sendContentPdf()">📨 Send PDF on Chat</button><button class="btn ghost" onclick="addQuestionRow()">➕ Add Question</button></div></div><div id="bulkQuestions"></div><div class="toolbar" style="margin-top:12px"><button class="btn green" onclick="saveBulkContent()">💾 Save All Questions</button><button class="btn ghost" onclick="clearQuestionRows()">Clear Draft</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Created</th><th>Action</th></tr></thead><tbody id="contentBody"></tbody></table></div></section>
+<section id="pyqs" class="tabsec hidden"><div class="card" style="border:2px solid #dbe7ff"><h2>📚 PYQ Upload</h2><p style="color:#667085">Exam + Year + Paper + Language चुनें। Questions + Model Answers file Q1./ANS1. format में और Rubric अलग file में upload करें। Maximum 20 questions। केवल uploaded और rubric-complete PYQs evaluation में selectable होंगे।</p><div class="formgrid"><select id="pyqExam" class="input"><option value="UPPCS">UPPCS</option><option value="BPSC">BPSC</option><option value="RO_ARO">RO/ARO</option><option value="BEO">BEO</option></select><input id="pyqYear" class="input" type="number" placeholder="Year"><select id="pyqPaper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option><option>GENERAL_HINDI</option><option>ESSAY</option></select><select id="pyqLang" class="input"><option>Hindi</option><option>English</option></select></div><label>1️⃣ Questions + Model Answers (Q1./ANS1. ... maximum 20)</label><input id="pyqFile" class="input" type="file" accept=".txt,.text,.md" required><label style="display:block;margin-top:10px">2️⃣ Rubric</label><input id="pyqRubricFile" class="input" type="file" accept=".txt,.text,.md" required><div class="toolbar" style="margin-top:10px"><button class="btn blue" onclick="uploadPYQ()">💾 Save PYQ + Rubric</button></div><small id="pyqStatus" style="color:#667085"></small></div><div class="section tablewrap"><table class="table"><thead><tr><th>Exam</th><th>Year</th><th>Paper</th><th>Language</th><th>Questions</th><th>Rubric</th><th>Action</th></tr></thead><tbody id="pyqBody"></tbody></table></div></section>
+<section id="admins" class="tabsec hidden"><div class="card"><h2>👑 Admin Management</h2><p>केवल Super Admin दूसरे Admin accounts जोड़/हटा सकता है।</p><div class="toolbar"><input id="adminId" class="input" placeholder="Telegram User ID"><button class="btn blue" onclick="addAdmin()">➕ Add Admin</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>Telegram ID</th><th>Role</th><th>Status</th><th>Last Login</th><th>Action</th></tr></thead><tbody id="adminsBody"></tbody></table></div></section>
 </div></div>
 <div id="modal" class="modal hidden" onclick="if(event.target===this)closeModal()"><div class="modalbox"><button class="btn gray close" onclick="closeModal()">Close</button><div id="modalBody"></div></div></div>
 <script>
@@ -4517,18 +4529,92 @@ async function loadAdmins(){try{let d=await api('/api/admin/admins');adminsBody.
 async function addAdmin(){let id=adminId.value.trim();if(!/^\\d+$/.test(id))return alert('Numeric Telegram User ID डालें');await api('/api/admin/admins',{method:'POST',body:JSON.stringify({telegram_user_id:id})});adminId.value='';loadAdmins()}
 async function removeAdmin(id){if(!confirm('इस Admin का access हटाना है?'))return;await api('/api/admin/admins/'+encodeURIComponent(id),{method:'DELETE'});loadAdmins()}
 async function readTextFile(input){let f=input&&input.files&&input.files[0];return f?await f.text():''}
-async function uploadDQ(){try{let qa=await readTextFile(document.getElementById('dqFile'))||dqText.value;let rubric=await readTextFile(document.getElementById('dqRubricFile'))||dqRubric.value;let d=await api('/api/admin/daily/upload',{method:'POST',body:JSON.stringify({date:dqDate.value||new Date().toISOString().slice(0,10),language:dqLang.value,paper:dqPaper.value,qa_text:qa})});dqStatus.textContent='✅ '+d.count+' questions saved. Set: '+d.set_id;loadContent()}catch(e){dqStatus.textContent='❌ '+e.message}}
-async function uploadDQRubric(){let sid=prompt('Existing Daily Set ID डालें');if(!sid)return;let rubric=await readTextFile(document.getElementById('dqRubricFile'))||dqRubric.value;if(!rubric)return alert('Rubric file/text दें');try{await api('/api/admin/content-rubric',{method:'POST',body:JSON.stringify({set_id:sid,rubric})});dqStatus.textContent='✅ Rubric updated.'}catch(e){dqStatus.textContent='❌ '+e.message}}
+async function uploadDQ(){try{let qa=await readTextFile(document.getElementById('dqFile'));let rubric=await readTextFile(document.getElementById('dqRubricFile'));if(!qa)return alert('Questions + Model Answers file upload करें');if(!rubric)return alert('Rubric file upload करें');let d=await api('/api/admin/daily/upload',{method:'POST',body:JSON.stringify({date:dqDate.value||new Date().toISOString().slice(0,10),language:dqLang.value,paper:dqPaper.value,qa_text:qa,rubric:rubric})});dqStatus.textContent='✅ '+d.count+' questions + Rubric saved. Set: '+d.set_id;loadContent()}catch(e){dqStatus.textContent='❌ '+e.message}}
 async function sendDQ(){try{let d=await api('/api/admin/dq/send-pdf?content_date='+(encodeURIComponent(dqDate.value||''))+'&language='+encodeURIComponent(dqLang.value),{method:'POST'});alert('✅ '+(d.message||'DQ PDF sent.'))}catch(e){alert(e.message)}}
-async function uploadPYQ(){try{let qa=await readTextFile(pyqFile)||pyqText.value;let rubric=await readTextFile(pyqRubricFile)||pyqRubric.value;let d=await api('/api/admin/pyq/upload',{method:'POST',body:JSON.stringify({exam:pyqExam.value,year:pyqYear.value,paper:pyqPaper.value,language:pyqLang.value,qa_text:qa})});pyqStatus.textContent='✅ '+d.count+' questions saved. Set: '+d.set_id;window.lastPYQSet=d.set_id;loadPYQs()}catch(e){pyqStatus.textContent='❌ '+e.message}}
-async function uploadPYQRubric(){let sid=window.lastPYQSet||prompt('Existing PYQ Set ID डालें');if(!sid)return;let rubric=await readTextFile(pyqRubricFile)||pyqRubric.value;if(!rubric)return alert('Rubric file/text दें');try{await api('/api/admin/content-rubric',{method:'POST',body:JSON.stringify({set_id:sid,rubric})});pyqStatus.textContent='✅ PYQ Rubric updated.'}catch(e){pyqStatus.textContent='❌ '+e.message}}
-async function loadPYQs(){try{let d=await api('/api/admin/content-sets');let rows=(d.items||[]).filter(x=>x.content_type==='pyq');pyqBody.innerHTML=rows.map(x=>`<tr><td>${esc(x.exam)}</td><td>${esc(x.year||'-')}</td><td>${esc(x.paper)}</td><td>${esc(x.language)}</td><td>—</td><td><button class="btn ghost" onclick="prompt('Set ID', '${esc(x.id)}')">ID</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">No PYQ uploaded.</td></tr>'}catch(e){pyqStatus.textContent='❌ '+e.message}}
+async function uploadPYQ(){try{let qa=await readTextFile(pyqFile);let rubric=await readTextFile(pyqRubricFile);if(!qa)return alert('Questions + Model Answers file upload करें');if(!rubric)return alert('Rubric file upload करें');let d=await api('/api/admin/pyq/upload',{method:'POST',body:JSON.stringify({exam:pyqExam.value,year:pyqYear.value,paper:pyqPaper.value,language:pyqLang.value,qa_text:qa,rubric:rubric})});pyqStatus.textContent='✅ '+d.count+' questions + Rubric saved. Set: '+d.set_id;window.lastPYQSet=d.set_id;loadPYQs()}catch(e){pyqStatus.textContent='❌ '+e.message}}
+async function loadPYQs(){try{let d=await api('/api/admin/content-sets');let rows=(d.items||[]).filter(x=>x.content_type==='pyq');pyqBody.innerHTML=rows.map(x=>`<tr><td>${esc(x.exam)}</td><td>${esc(x.year||'-')}</td><td>${esc(x.paper)}</td><td>${esc(x.language)}</td><td>${esc(x.question_count||0)}</td><td>${x.rubric?'✅ Uploaded':'❌ Missing'}</td><td><button class="btn ghost" onclick="prompt('Set ID', '${esc(x.id)}')">ID</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">No PYQ uploaded.</td></tr>'}catch(e){pyqStatus.textContent='❌ '+e.message}}
 function closeModal(){modal.classList.add('hidden');modalBody.innerHTML=''}
 show();
 </script></body></html>
 """
     html = html.replace("__BOT_USERNAME__", bot_username)
     return HTMLResponse(content=html)
+
+@app.post("/api/admin/daily/upload")
+async def admin_daily_upload(request: Request):
+    admin = current_admin(request)
+    if not admin: return admin_denied()
+    ensure_new_schema()
+    body = await request.json()
+    content_date = str(body.get("date") or datetime.now().date()).strip()
+    language = "English" if str(body.get("language") or "Hindi").lower().startswith("en") else "Hindi"
+    paper = str(body.get("paper") or "GS1").upper().strip()
+    qa_text = str(body.get("qa_text") or "")
+    rubric = str(body.get("rubric") or "").strip()
+    if not rubric: return app_error("Daily Questions के लिए Rubric upload करना जरूरी है।",400)
+    if paper not in PAPER_OPTIONS[:-1]:
+        return app_error("Valid GS paper select करें।", 400)
+    items = parse_qa_pairs(qa_text)
+    if not items: return app_error("Q1./ANS1. format में valid questions नहीं मिले।", 400)
+    sid = save_content_set("daily", "UPPCS", paper, language, rubric=rubric, content_date=content_date, title=f"Daily {content_date} {language}", items=items)
+    return {"ok":True,"set_id":sid,"count":len(items),"language":language,"content_date":content_date,"rubric_saved":bool(rubric)}
+
+
+@app.post("/api/admin/pyq/upload")
+async def admin_pyq_upload(request: Request):
+    admin = current_admin(request)
+    if not admin: return admin_denied()
+    ensure_new_schema()
+    body = await request.json()
+    exam = str(body.get("exam") or "UPPCS").upper().strip()
+    year_raw = str(body.get("year") or "").strip()
+    paper = str(body.get("paper") or "GS1").upper().strip()
+    language = "English" if str(body.get("language") or "Hindi").lower().startswith("en") else "Hindi"
+    qa_text = str(body.get("qa_text") or "")
+    rubric = str(body.get("rubric") or "").strip()
+    if not rubric: return app_error("PYQ evaluation के लिए Rubric upload करना जरूरी है।",400)
+    if exam not in EVALUATION_EXAMS: return app_error("Invalid exam selected.",400)
+    if paper not in PAPER_OPTIONS: return app_error("Invalid paper selected.",400)
+    try: year = int(year_raw) if year_raw else None
+    except ValueError: return app_error("Valid year required.",400)
+    items = parse_qa_pairs(qa_text)
+    if not items: return app_error("Q1./ANS1. format में valid questions नहीं मिले।",400)
+    if len(items) > 20: return app_error("एक PYQ paper में अधिकतम 20 questions allowed हैं।",400)
+    sid = save_content_set("pyq", exam, paper, language, rubric=rubric, year=year, title=f"{exam} {year or ''} {paper}", items=items)
+    return {"ok":True,"set_id":sid,"count":len(items),"rubric_saved":bool(rubric)}
+
+
+@app.post("/api/admin/content-rubric")
+async def admin_content_rubric(request: Request):
+    admin = current_admin(request)
+    if not admin: return admin_denied()
+    ensure_new_schema()
+    body = await request.json()
+    sid = str(body.get("set_id") or "").strip()
+    rubric = str(body.get("rubric") or "").strip()
+    if not sid or not rubric: return app_error("Set ID और Rubric दोनों required हैं।",400)
+    with engine.begin() as conn:
+        result = conn.exec_driver_sql("UPDATE content_sets SET rubric=%s,updated_at=%s WHERE id=%s AND is_active=TRUE", (rubric,_utcnow(),sid))
+    if not result.rowcount: return app_error("Content set नहीं मिला।",404)
+    return {"ok":True,"set_id":sid,"rubric_saved":True}
+
+
+@app.get("/api/admin/content-sets")
+def admin_content_sets(request: Request):
+    if not admin_authorized(request):
+        return admin_denied()
+    ensure_new_schema()
+    with engine.connect() as conn:
+        rows = conn.exec_driver_sql("""
+            SELECT cs.id,cs.content_type,cs.exam,cs.paper,cs.language,cs.content_date,cs.year,
+                   cs.title,cs.source_filename,cs.rubric,COUNT(ci.id) AS question_count
+            FROM content_sets cs
+            LEFT JOIN content_items ci ON ci.set_id=cs.id
+            WHERE cs.is_active=TRUE
+            GROUP BY cs.id
+            ORDER BY cs.created_at DESC
+        """).mappings().all()
+    return {"ok":True,"items":[dict(r) for r in rows]}
 
 @app.get("/api/evaluation/catalog")
 def public_evaluation_catalog():
@@ -4821,12 +4907,20 @@ def build_daily_content_pdf(rows, language):
     story = fitz.Story()
     css = """<style>body{font-family:sans-serif;color:#151922;font-size:11pt}h1{font-size:20pt;margin:0}h2{font-size:14pt;margin-top:18pt;color:#7b1e1e}h3{font-size:11pt;margin-top:12pt}table{border-collapse:collapse;width:100%}td,th{border:0.7pt solid #b8bec8;padding:5pt} .meta{color:#666;font-size:9pt}.footer{font-size:8pt;color:#666;border-top:0.7pt solid #bbb;padding-top:5pt}</style>"""
     parts=[css, f'<h1>PRANA PCS Mains AI</h1><div class="meta">{today} • {language}</div><hr>']
+    seen_rubrics = set()
     for i,r in enumerate(rows,1):
         q=html.escape(str(r.get("question") or ""))
         ans=str(r.get("model_answer") or "")
         if not re.search(r'<(p|div|table|ul|ol|strong|em|h[1-6])\b', ans, re.I):
             ans='<p>'+html.escape(ans).replace('\n','<br>')+'</p>'
         parts.append(f'<h2>{i}. {html.escape(str(r["paper"]))} — Daily Question</h2><p><b>Question:</b> {q}</p><h3>Model Answer</h3>{ans}')
+        rubric = str(r.get("rubric") or "").strip()
+        if rubric:
+            key = (str(r.get("set_id") or r.get("paper") or ""), rubric)
+            if key not in seen_rubrics:
+                seen_rubrics.add(key)
+                rubric_html = rubric if re.search(r'<(p|div|table|ul|ol|strong|em|h[1-6])\b', rubric, re.I) else '<p>'+html.escape(rubric).replace('\n','<br>')+'</p>'
+                parts.append(f'<h3>Rubric</h3>{rubric_html}')
     parts.append(f'<p class="footer">Telegram                         Instagram<br>YouTube                           WhatsApp<br><b>Paid Batches &amp; Content - 9984351085</b></p>')
     story.write(''.join(parts))
     writer=fitz.Document(); page_no=0
@@ -4853,15 +4947,26 @@ def build_daily_content_pdf(rows, language):
 
 
 
+
+
+def daily_pdf_filename(stamp, language):
+    lang = "English" if str(language).lower().startswith("en") else "Hindi"
+    stamp = str(stamp)
+    try:
+        stamp = datetime.strptime(stamp[:10], "%Y-%m-%d").strftime("%d-%m-%Y")
+    except Exception:
+        pass
+    return f"DQ_{stamp}_{lang}.pdf" if lang == "English" else f"Daily_Questions_{stamp}_{lang}.pdf"
+
 @app.get("/api/admin/dq/pdf")
 def admin_dq_pdf(request: Request, content_date: str = "", language: str = "Hindi"):
     if not admin_authorized(request): return admin_denied()
     ensure_new_schema(); lang='English' if str(language).lower().startswith('en') else 'Hindi'
     with engine.connect() as conn:
-        rows=conn.exec_driver_sql("""SELECT cs.paper,cs.language,cs.content_date,ci.question_number,ci.question,ci.model_answer\n            FROM content_sets cs JOIN content_items ci ON ci.set_id=cs.id\n            WHERE cs.content_type='daily' AND cs.is_active=TRUE AND cs.language=%s AND (%s='' OR CAST(cs.content_date AS TEXT)=%s)\n            ORDER BY cs.content_date DESC,cs.paper,ci.question_number""",(lang,content_date,content_date)).mappings().all()
+        rows=conn.exec_driver_sql("""SELECT cs.id AS set_id,cs.paper,cs.language,cs.content_date,cs.rubric,ci.question_number,ci.question,ci.model_answer\n            FROM content_sets cs JOIN content_items ci ON ci.set_id=cs.id\n            WHERE cs.content_type='daily' AND cs.is_active=TRUE AND cs.language=%s AND (%s='' OR CAST(cs.content_date AS TEXT)=%s)\n            ORDER BY cs.content_date DESC,cs.paper,ci.question_number""",(lang,content_date,content_date)).mappings().all()
     if not rows:return app_error('इस date/language के लिए Daily Questions नहीं मिले।',404)
     out=build_daily_content_pdf([dict(r) for r in rows],lang)
-    response=Response(content=out,media_type='application/pdf'); stamp=content_date or str(rows[0].get('content_date') or datetime.now().date()); response.headers['Content-Disposition']=f'attachment; filename="DQ_{stamp}_{lang}.pdf"'; return response
+    response=Response(content=out,media_type='application/pdf'); stamp=content_date or str(rows[0].get('content_date') or datetime.now().date()); filename = daily_pdf_filename(stamp, lang); response.headers['Content-Disposition']=f'attachment; filename="{filename}"'; return response
 
 @app.post("/api/admin/dq/send-pdf")
 def admin_dq_send_pdf(request: Request, content_date: str = "", language: str = "Hindi"):
@@ -4870,9 +4975,9 @@ def admin_dq_send_pdf(request: Request, content_date: str = "", language: str = 
     if not bot:return app_error('Telegram bot is not configured.',500)
     ensure_new_schema(); lang='English' if str(language).lower().startswith('en') else 'Hindi'
     with engine.connect() as conn:
-        rows=conn.exec_driver_sql("""SELECT cs.paper,cs.language,cs.content_date,ci.question_number,ci.question,ci.model_answer\n            FROM content_sets cs JOIN content_items ci ON ci.set_id=cs.id\n            WHERE cs.content_type='daily' AND cs.is_active=TRUE AND cs.language=%s AND (%s='' OR CAST(cs.content_date AS TEXT)=%s)\n            ORDER BY cs.content_date DESC,cs.paper,ci.question_number""",(lang,content_date,content_date)).mappings().all()
+        rows=conn.exec_driver_sql("""SELECT cs.id AS set_id,cs.paper,cs.language,cs.content_date,cs.rubric,ci.question_number,ci.question,ci.model_answer\n            FROM content_sets cs JOIN content_items ci ON ci.set_id=cs.id\n            WHERE cs.content_type='daily' AND cs.is_active=TRUE AND cs.language=%s AND (%s='' OR CAST(cs.content_date AS TEXT)=%s)\n            ORDER BY cs.content_date DESC,cs.paper,ci.question_number""",(lang,content_date,content_date)).mappings().all()
     if not rows:return app_error('इस date/language के लिए Daily Questions नहीं मिले।',404)
-    out=build_daily_content_pdf([dict(r) for r in rows],lang); bio=io.BytesIO(out); stamp=content_date or str(rows[0].get('content_date') or datetime.now().date()); bio.name=f'DQ_{stamp}_{lang}.pdf'; bot.send_document(str(admin['id']),bio,caption=f'📚 DQ {stamp} • {lang}'); return {'ok':True,'message':'DQ PDF Telegram chat में भेज दी गई है।','filename':bio.name}
+    out=build_daily_content_pdf([dict(r) for r in rows],lang); bio=io.BytesIO(out); stamp=content_date or str(rows[0].get('content_date') or datetime.now().date()); bio.name=daily_pdf_filename(stamp, lang); bot.send_document(str(admin['id']),bio,caption=f'📚 DQ {stamp} • {lang}'); return {'ok':True,'message':'DQ PDF Telegram chat में भेज दी गई है।','filename':bio.name}
 
 @app.post("/api/admin/content/send-pdf")
 def admin_content_send_pdf(request: Request, language: str = ""):
@@ -4907,19 +5012,19 @@ def admin_content_send_pdf(request: Request, language: str = ""):
 
 
 @app.post("/api/app/daily/send-pdf")
-def app_send_daily_pdf(request: Request, language: str = "Hindi", content_date: str = ""):
+def app_send_daily_pdf(request: Request, language: str = "Hindi", content_date: str = "", paper: str = ""):
     uid=require_app_user(request)
     if not uid:return app_error("Unauthorized",401)
     if not bot:return app_error("Telegram bot is not configured.",500)
     ensure_new_schema(); lang="English" if str(language).lower().startswith("en") else "Hindi"
     with engine.connect() as conn:
-        rows=conn.exec_driver_sql("""SELECT cs.paper,cs.language,cs.content_date,ci.question_number,ci.question,ci.model_answer
+        rows=conn.exec_driver_sql("""SELECT cs.id AS set_id,cs.paper,cs.language,cs.content_date,cs.rubric,ci.question_number,ci.question,ci.model_answer
             FROM content_sets cs JOIN content_items ci ON ci.set_id=cs.id
-            WHERE cs.content_type='daily' AND cs.is_active=TRUE AND cs.language=%s AND (%s='' OR CAST(cs.content_date AS TEXT)=%s)
-            ORDER BY cs.content_date DESC,cs.paper,ci.question_number""",(lang,content_date,content_date)).mappings().all()
+            WHERE cs.content_type='daily' AND cs.is_active=TRUE AND cs.language=%s AND (%s='' OR CAST(cs.content_date AS TEXT)=%s) AND (%s='' OR cs.paper=%s)
+            ORDER BY cs.content_date DESC,cs.paper,ci.question_number""",(lang,content_date,content_date,paper.upper(),paper.upper())).mappings().all()
     if not rows:return app_error("No Daily Questions available.",404)
     try:
-        out=build_daily_content_pdf([dict(r) for r in rows],lang); stamp=content_date or str(rows[0].get('content_date') or datetime.now().date()); bio=io.BytesIO(out); bio.name=f"DQ_{stamp}_{lang}.pdf"
+        out=build_daily_content_pdf([dict(r) for r in rows],lang); stamp=content_date or str(rows[0].get('content_date') or datetime.now().date()); bio=io.BytesIO(out); bio.name=daily_pdf_filename(stamp, lang)
         bot.send_document(str(uid),bio,caption=f"📚 <b>DQ {stamp} • {lang}</b>\nPRANA PCS Mains AI")
         return {"ok":True,"message":"Daily Questions PDF sent to Telegram chat.","filename":bio.name}
     except Exception as e:
@@ -5807,6 +5912,7 @@ async def app_evaluate(
             access_ok=True; access_source=grp_source
         else:
             return app_error("Access Denied — evaluation access नहीं है।", 403)
+    trial_question_estimate = 1
     if evaluation_type in ("DAILY","PYQ","GROUP"):
         if not source_id:
             return app_error("इस evaluation type के लिए uploaded content select करना जरूरी है।",400)
@@ -5814,6 +5920,11 @@ async def app_evaluate(
             return app_error("Selected uploaded content/model answer/rubric उपलब्ध नहीं है।",400)
         if evaluation_type in ("DAILY","PYQ") and not content_set_has_rubric(source_id):
             return app_error("इस content का Rubric अभी upload नहीं हुआ है।",400)
+        try:
+            with engine.connect() as conn:
+                trial_question_estimate = int(conn.exec_driver_sql("SELECT COUNT(*) FROM content_items WHERE set_id=%s", (str(source_id),)).scalar() or 1)
+        except Exception:
+            trial_question_estimate = 1
     if not files:
         return app_error("Copy upload करें।", 400)
 
@@ -5841,6 +5952,20 @@ async def app_evaluate(
 
     if not prepared:
         return app_error("Valid copy file नहीं मिला।", 400)
+
+    # Trial quota is consumed only after a successful evaluation in the background task.
+    # For source-backed evaluations we can reject an oversized paper before starting Gemini.
+    if access_source == "trial":
+        try:
+            session_trial = SessionLocal()
+            try:
+                tu = session_trial.get(DBUser, str(uid))
+                if tu and int(tu.trial_questions_used or 0) + int(trial_question_estimate or 1) > int(tu.trial_questions_limit or 10):
+                    return app_error("Trial limit reached — अधिकतम 3 copies OR 10 questions allowed हैं।", 403)
+            finally:
+                session_trial.close()
+        except Exception:
+            pass
 
     # One PDF is used directly. Multiple images are merged into one PDF.
     if len(prepared) == 1 and Path(prepared[0][0]).suffix.lower() == ".pdf":
