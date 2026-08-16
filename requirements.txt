@@ -7,3 +7,4 @@ PyMuPDF
 SQLAlchemy
 psycopg2-binary
 python-multipart
+cryptography
