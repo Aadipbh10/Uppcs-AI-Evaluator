@@ -7,6 +7,7 @@ import html
 import json
 import os
 import time
+from urllib.parse import parse_qs
 
 import requests
 import uvicorn
@@ -22,6 +23,7 @@ builtins.html = html
 builtins.json = json
 builtins.os = os
 builtins.time = time
+builtins.parse_qs = parse_qs
 builtins.Response = Response
 builtins.HTMLResponse = HTMLResponse
 builtins.desc = desc
