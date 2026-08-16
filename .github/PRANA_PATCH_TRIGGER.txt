@@ -1,0 +1,1 @@
+Trigger unified Telegram/Mini App patch.
