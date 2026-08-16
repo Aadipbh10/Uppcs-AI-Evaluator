@@ -664,8 +664,6 @@ def get_database_summary():
 
 MODELS = [
     "gemini-3.6-flash",
-    "gemini-3.7-flash",
-    "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
 ]
 
@@ -1013,14 +1011,14 @@ def image_pages_from_pdf(pdf):
     for page in pdf:
 
         pix = page.get_pixmap(
-            dpi=120,
+            dpi=96,
             alpha=False
         )
 
         pages.append(
             pix.tobytes(
                 "jpeg",
-                jpg_quality=88
+                jpg_quality=84
             )
         )
 
@@ -1056,9 +1054,19 @@ def build_prompt(
     exam="UPPCS"
 ):
 
+    forced_language_override = ""
+    if str(paper).upper() == "GENERAL_HINDI":
+        forced_language_override = (
+            "\n============================================================\n"
+            "OVERRIDE (अनिवार्य): यह General Hindi paper है।\n"
+            "इसका पूरा मूल्यांकन, सभी examiner comments, feedback और summary\n"
+            "अनिवार्य रूप से केवल हिंदी में होंगे — किसी भी परिस्थिति में English में नहीं।\n"
+            "============================================================\n"
+        )
+
     return f"""
 आप PRANA PCS के वरिष्ठ UPPCS Mains examiner हैं।
-
+{forced_language_override}
 Paper: {paper}
 Total pages: {total_pages}
 
@@ -1527,7 +1535,8 @@ def call_gemini(
 
         "generationConfig": {
             "response_mime_type": "application/json",
-            "temperature": 0.15
+            "thinkingConfig": {"thinkingLevel": "low"},
+            "maxOutputTokens": 24000
         }
     }
 
@@ -1546,7 +1555,7 @@ def call_gemini(
             response = requests.post(
                 url,
                 json=payload,
-                timeout=90
+                timeout=(15, 75)
             )
 
             if response.status_code == 200:
@@ -1772,6 +1781,18 @@ def normalize_result(
                         "end_page_comment",
                         ""
                     )
+                ).strip(),
+
+                "intro_comment": str(
+                    question.get("intro_comment", "")
+                ).strip(),
+
+                "body_comment": str(
+                    question.get("body_comment", "")
+                ).strip(),
+
+                "conclusion_comment": str(
+                    question.get("conclusion_comment", "")
                 ).strip()
             }
         )
@@ -4020,15 +4041,7 @@ def telegram_chat_access_allowed(message):
         user = session.get(DBUser, uid) if uid else None
         if user and user.is_blocked:
             return False, "blocked"
-        is_privileged = bool(SUPER_ADMIN_TELEGRAM_ID and uid == SUPER_ADMIN_TELEGRAM_ID)
-        if not is_privileged:
-            try:
-                ar = session.execute(__import__("sqlalchemy").text(
-                    "SELECT role,is_active FROM admin_users WHERE telegram_user_id=:uid LIMIT 1"
-                ), {"uid":uid}).mappings().first()
-                is_privileged = bool(ar and ar["is_active"] and str(ar["role"]).lower() in ("admin","super_admin"))
-            except Exception:
-                is_privileged = False
+        is_privileged = resolve_admin_role(uid, session=session) is not None
         if is_privileged:
             if user:
                 user.is_allowed=True; user.access_type="full"; session.commit()
@@ -4551,21 +4564,7 @@ async def admin_telegram_login(request: Request):
     if not uid:
         return Response(content=b'{"ok":false,"error":"Telegram User ID missing"}', status_code=400, media_type="application/json")
 
-    role = None
-    if SUPER_ADMIN_TELEGRAM_ID and uid == SUPER_ADMIN_TELEGRAM_ID:
-        role = "super_admin"
-    elif uid in ADMIN_TELEGRAM_IDS:
-        role = "admin"
-    elif DB_ENABLED:
-        s = SessionLocal()
-        try:
-            row = s.execute(__import__("sqlalchemy").text(
-                "SELECT role,is_active FROM admin_users WHERE telegram_user_id=:uid"
-            ), {"uid": uid}).mappings().first()
-            if row and row["is_active"]:
-                role = str(row["role"])
-        finally:
-            s.close()
+    role = resolve_admin_role(uid)
 
     if not role:
         return Response(content=b'{"ok":false,"error":"Telegram account is not an authorized admin"}', status_code=403, media_type="application/json")
@@ -5710,23 +5709,7 @@ async def app_admin_auth(request: Request):
         return app_error("Telegram authentication invalid or expired.", 401)
 
     uid = str(user["id"])
-    role = None
-    if SUPER_ADMIN_TELEGRAM_ID and uid == SUPER_ADMIN_TELEGRAM_ID:
-        role = "super_admin"
-    elif uid in ADMIN_TELEGRAM_IDS:
-        role = "admin"
-    elif DB_ENABLED and SessionLocal is not None:
-        s = SessionLocal()
-        try:
-            row = s.execute(
-                __import__("sqlalchemy").text(
-                    "SELECT role,is_active FROM admin_users WHERE telegram_user_id=:uid"
-                ), {"uid": uid}
-            ).mappings().first()
-            if row and row["is_active"]:
-                role = str(row["role"])
-        finally:
-            s.close()
+    role = resolve_admin_role(uid)
     if not role:
         return app_error("यह Telegram account authorized admin नहीं है।", 403)
 
