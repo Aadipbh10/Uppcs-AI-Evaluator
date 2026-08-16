@@ -36,12 +36,8 @@ def robust_telegram_webapp_validate(init_data):
         if not uid:return None
         return {"id":uid,"username":u.get("username"),"first_name":u.get("first_name"),"last_name":u.get("last_name"),"language_code":u.get("language_code")}
     except Exception:return None
-main.telegram_webapp_validate=robust_telegram_webapp_validate
-_original_app_user_payload=main.app_user_payload
-def safe_app_user_payload(uid):
-    try:return _original_app_user_payload(uid)
-    except Exception:return {"id":str(uid),"name":"Student","username":None,"submissions":0,"obtained":0,"max":0,"average_percentage":0}
-main.app_user_payload=safe_app_user_payload
+# telegram_webapp_validate (robust HMAC + Ed25519) and app_user_payload (safe
+# defaults on error) now live in main.py, so no runtime override is applied here.
 main.MODELS=["gemini-3.6-flash","gemini-3.5-flash-lite"]
 def fast_image_pages_from_pdf(pdf):
     return [page.get_pixmap(dpi=96,alpha=False).tobytes("jpeg",jpg_quality=84) for page in pdf]
@@ -64,10 +60,11 @@ def fast_call_gemini(images,paper,evaluation_type="GENERAL",source_id=None,exam=
         except Exception as e:last=f"{model}: {e}"
     raise Exception("Gemini evaluation failed: "+last)
 main.call_gemini=fast_call_gemini; main.EVALUATION_STALE_SECONDS=600
-_original_run_webapp_evaluation=main.run_webapp_evaluation
-def threaded_run_webapp_evaluation(*args,**kwargs):
-    threading.Thread(target=_original_run_webapp_evaluation,args=args,kwargs=kwargs,daemon=True,name="prana-evaluation-worker").start()
-main.run_webapp_evaluation=threaded_run_webapp_evaluation
+# IMPORTANT: do NOT wrap run_webapp_evaluation in a detached daemon thread.
+# On Cloud Run, CPU is allocated only while a request is in flight; a fire-and-forget
+# thread gets throttled/killed after the response returns, which is what left copies
+# stuck in "processing". FastAPI BackgroundTasks (used by /api/app/evaluate) run the
+# work within the request lifecycle, so the CPU stays allocated until it finishes.
 @main.app.get("/api/health")
 def health_check():return {"ok":True,"runtime":"google-cloud-run","database_configured":bool(main.DB_ENABLED and main.SessionLocal is not None),"telegram_bot_configured":bool(main.bot),"gemini_configured":bool(main.GEMINI_API_KEY),"mini_app":True,"models":list(main.MODELS)}
 if __name__=="__main__":uvicorn.run(main.app,host="0.0.0.0",port=int(os.getenv("PORT","10000")))
