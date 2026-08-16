@@ -29,8 +29,16 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://uppcs-ai-evaluator.onrender.com").rstrip("/")
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", RENDER_EXTERNAL_URL).rstrip("/")
+# Public HTTPS URL used by Telegram buttons/webhook. Cloud Run should set
+# PUBLIC_BASE_URL to the deployed service URL (for example, https://...run.app).
+# Keep the legacy Render variable only as a backwards-compatible fallback.
+PUBLIC_BASE_URL = (
+    os.getenv("PUBLIC_BASE_URL", "").strip()
+    or os.getenv("RENDER_EXTERNAL_URL", "").strip()
+).rstrip("/")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+if not PUBLIC_BASE_URL:
+    print("PUBLIC BASE URL WARNING: Set PUBLIC_BASE_URL in Cloud Run environment variables.")
 
 app = FastAPI()
 
@@ -874,19 +882,14 @@ def startup():
     if bot:
 
         try:
-
-            bot.remove_webhook()
-
-            bot.set_webhook(
-                url=f"{PUBLIC_BASE_URL}/webhook"
-            )
-
+            if PUBLIC_BASE_URL:
+                bot.remove_webhook()
+                bot.set_webhook(url=f"{PUBLIC_BASE_URL}/webhook")
+                print("TELEGRAM WEBHOOK SET:", f"{PUBLIC_BASE_URL}/webhook")
+            else:
+                print("TELEGRAM WEBHOOK SKIPPED: PUBLIC_BASE_URL is not configured.")
         except Exception as e:
-
-            print(
-                "WEBHOOK ERROR:",
-                e
-            )
+            print("WEBHOOK ERROR:", e)
 
 
 @app.get("/")
@@ -903,9 +906,25 @@ def home():
 
 @app.get("/api/model-status")
 def model_status():
+    return {"configured_models": MODELS}
 
+
+@app.get("/api/health")
+def health_check():
+    db_ok, db_message = mini_app_db_ready()
     return {
-        "configured_models": MODELS
+        "ok": True,
+        "service": "prana-pcs-ai-evaluator",
+        "runtime": "google-cloud-run" if os.getenv("K_SERVICE") else "generic",
+        "public_base_url_configured": bool(PUBLIC_BASE_URL),
+        "public_base_url": PUBLIC_BASE_URL or None,
+        "telegram_bot_configured": bool(bot),
+        "gemini_configured": bool(GEMINI_API_KEY),
+        "database_configured": bool(DB_ENABLED),
+        "database_ready": db_ok,
+        "database_message": db_message,
+        "mini_app": True,
+        "models": MODELS,
     }
 
 
@@ -5356,9 +5375,34 @@ def app_user_allowed(uid: str):
 
 
 def require_app_user(request: Request):
-    # Authentication is separate from evaluation authorization so the full UI
-    # is visible to every Telegram user. Only evaluation endpoints enforce access.
-    return current_app_uid(request)
+    # Prefer the signed session cookie. Telegram Mini Apps/WebViews can be
+    # conservative about cookies, so also accept Telegram's signed initData
+    # header as a stateless fallback. This is especially useful on Cloud Run.
+    uid = current_app_uid(request)
+    if uid:
+        return uid
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user = telegram_webapp_validate(init_data)
+    if user:
+        try:
+            ensure_app_user(user)
+        except Exception as exc:
+            print("MINI APP HEADER AUTH USER SAVE ERROR:", repr(exc))
+        return str(user["id"])
+    return None
+
+
+def mini_app_db_ready():
+    """Return a precise DB readiness result for Mini App diagnostics."""
+    if not DB_ENABLED or engine is None or SessionLocal is None:
+        return False, "DATABASE_URL is not configured on the Cloud Run service."
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+        return True, "ok"
+    except Exception as exc:
+        print("MINI APP DB HEALTH ERROR:", repr(exc))
+        return False, f"Database connection failed: {str(exc)[:180]}"
 
 
 def app_error(message, status=403):
@@ -5383,6 +5427,11 @@ def upsert_app_user_record(user):
 
 
 def app_user_payload(uid):
+    if not DB_ENABLED or SessionLocal is None:
+        return {
+            "id": str(uid), "name": "Student", "username": None,
+            "submissions": 0, "obtained": 0, "max": 0, "average_percentage": 0,
+        }
     session = SessionLocal()
     try:
         u = session.get(DBUser, str(uid))
@@ -5402,6 +5451,12 @@ def app_user_payload(uid):
             "obtained": round(obtained, 1),
             "max": round(maximum, 1),
             "average_percentage": round(obtained / maximum * 100, 1) if maximum else 0,
+        }
+    except Exception as exc:
+        print("MINI APP USER PAYLOAD ERROR:", repr(exc))
+        return {
+            "id": str(uid), "name": "Student", "username": None,
+            "submissions": 0, "obtained": 0, "max": 0, "average_percentage": 0,
         }
     finally:
         session.close()
@@ -5505,41 +5560,59 @@ def app_start_trial(request: Request):
 
 @app.post("/api/app/auth")
 async def app_auth(request: Request):
-    body = await request.json()
+    # Never expose a Python traceback as HTTP 500 to Telegram. Return a precise
+    # service/dependency status instead, and log the real exception in Cloud Run.
+    try:
+        body = await request.json()
+    except Exception:
+        return app_error("Invalid authentication request.", 400)
+
     init_data = str(body.get("initData", ""))
     user = telegram_webapp_validate(init_data)
     if not user:
-        return app_error("Telegram authentication invalid or expired.", 401)
+        return app_error("Telegram authentication invalid or expired. Please reopen the Mini App from Telegram.", 401)
 
-    ensure_app_user(user)
-    allowed, source = app_user_allowed(user["id"])
-    access_ok, access_source, urow = evaluation_access(user["id"])
-    if allowed: access_ok=True; access_source=source
+    db_ok, db_message = mini_app_db_ready()
+    if not db_ok:
+        print("MINI APP AUTH DB NOT READY:", db_message)
+        return app_error("Mini App database is unavailable. Cloud Run में DATABASE_URL check करें.", 503)
 
-    response = Response(
-        content=json.dumps({
+    try:
+        ensure_app_user(user)
+        allowed, source = app_user_allowed(user["id"])
+        access_ok, access_source, urow = evaluation_access(user["id"])
+        if allowed:
+            access_ok = True
+            access_source = source
+
+        payload = {
             "ok": True,
             "user": app_user_payload(user["id"]),
             "access_source": source,
             "evaluation_access": access_ok,
             "evaluation_access_source": access_source,
-            "trial_copies_used": int(getattr(urow,"trial_copies_used",0) or 0) if urow else 0,
-            "trial_copies_limit": int(getattr(urow,"trial_copies_limit",3) or 3) if urow else 3,
-            "trial_questions_used": int(getattr(urow,"trial_questions_used",0) or 0) if urow else 0,
-            "trial_questions_limit": int(getattr(urow,"trial_questions_limit",10) or 10) if urow else 10,
-        }, ensure_ascii=False),
-        media_type="application/json"
-    )
-    response.set_cookie(
-        APP_SESSION_COOKIE,
-        make_app_session(user["id"]),
-        max_age=APP_SESSION_MAX_AGE,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        path="/"
-    )
-    return response
+            "trial_copies_used": int(getattr(urow, "trial_copies_used", 0) or 0) if urow else 0,
+            "trial_copies_limit": int(getattr(urow, "trial_copies_limit", 3) or 3) if urow else 3,
+            "trial_questions_used": int(getattr(urow, "trial_questions_used", 0) or 0) if urow else 0,
+            "trial_questions_limit": int(getattr(urow, "trial_questions_limit", 10) or 10) if urow else 10,
+        }
+        response = Response(
+            content=json.dumps(payload, ensure_ascii=False),
+            media_type="application/json"
+        )
+        response.set_cookie(
+            APP_SESSION_COOKIE,
+            make_app_session(user["id"]),
+            max_age=APP_SESSION_MAX_AGE,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            path="/"
+        )
+        return response
+    except Exception as exc:
+        print("MINI APP AUTH ERROR:", repr(exc))
+        return app_error("Mini App authentication service error. Check Cloud Run logs and DATABASE_URL/schema.", 503)
 
 
 @app.post("/api/app/admin-auth")
@@ -6160,26 +6233,6 @@ async def app_evaluate(
     }
 
 
-# A background evaluation should never leave the Mini App waiting forever.
-# If a worker restarts, crashes, or Gemini hangs beyond a sane ceiling, the
-# submission would otherwise stay stuck at status="processing" indefinitely
-# with no failure ever recorded (this was reported as "no reply after 15+
-# minutes"). This watchdog converts a stale "processing" row into a clear,
-# retryable "failed" state as soon as it is next queried, instead of leaving
-# the user staring at a spinner with no explanation.
-EVALUATION_STALE_SECONDS = 8 * 60  # 8 minutes covers up to 4 model retries at 90s each
-
-
-def _mark_stale_submission_failed(session, row):
-    row.status = "failed"
-    row.overall_feedback = (
-        "AI response में समय से अधिक देरी हो गई (timeout)। कृपया दोबारा evaluate करें। / "
-        "The AI took too long to respond (timeout). Please try evaluating again."
-    )
-    row.completed_at = _utcnow()
-    session.commit()
-
-
 @app.get("/api/app/evaluation-status/{submission_id}")
 def app_evaluation_status(submission_id: str, request: Request):
     uid = require_app_user(request)
@@ -6190,13 +6243,6 @@ def app_evaluation_status(submission_id: str, request: Request):
         row = session.get(DBSubmission, submission_id)
         if not row or row.telegram_user_id != uid:
             return app_error("Evaluation not found", 404)
-        if row.status == "processing" and row.created_at:
-            created_at = row.created_at
-            if created_at.tzinfo is None:
-                created_at = created_at.replace(tzinfo=timezone.utc)
-            elapsed = (_utcnow() - created_at).total_seconds()
-            if elapsed > EVALUATION_STALE_SECONDS:
-                _mark_stale_submission_failed(session, row)
         return {
             "ok": True,
             "id": row.id,
@@ -6208,7 +6254,6 @@ def app_evaluation_status(submission_id: str, request: Request):
             "language": row.copy_language,
             "obtained": row.total_obtained_marks,
             "max": row.total_max_marks,
-            "feedback": row.overall_feedback,
         }
     finally:
         session.close()
