@@ -132,8 +132,9 @@ def _patch():
             try: main.bot.send_message(chat_id, f"⚠️ Evaluated PDF तैयार हुआ, लेकिन Telegram पर भेजने में समस्या हुई: {str(exc)[:220]}")
             except Exception: pass
 
-    main._run_telegram_evaluation = stable_telegram_worker
-    print("PRANA TELEGRAM PATCH ACTIVE: stable chat-id scoped worker")
+    # NOTE: the chat-id scope fix now lives directly in main._run_telegram_evaluation,
+    # so this runtime override is intentionally no longer applied.
+    print("PRANA TELEGRAM PATCH: skipped (fix folded into main.py)")
 
 _patch()
 
@@ -186,4 +187,9 @@ def _patch_detached_user():
     except Exception as exc:
         print("PRANA MINI APP AUTH PATCH ERROR:", repr(exc))
 
-_patch_detached_user()
+# NOTE: evaluation_access is now correct in main.py (expire_on_commit=False, no
+# leaked ORM rows, unified admin resolver). This runtime wrapper is kept for
+# reference but intentionally NOT invoked, to avoid double-wrapping and the
+# non-spec auto-trial-on-open behaviour.
+# _patch_detached_user()
+print("PRANA MINI APP AUTH PATCH: skipped (fix folded into main.py)")
