@@ -1,8 +1,4 @@
-"""PRANA PCS production stability/latency patch.
-
-Python loads sitecustomize before uvicorn imports main. This lets us keep the
-large evaluator code intact while applying small, auditable runtime patches.
-"""
+"""PRANA PCS production stability/latency patch."""
 
 def _patch():
     try:
@@ -27,9 +23,6 @@ def _patch():
     import requests
     from pathlib import Path
 
-    # Preserve the evaluator's Intro/Body/Conclusion fields. The legacy
-    # normalizer was dropping these fields even though the Gemini schema and
-    # database model already support them.
     original_normalize_result = main.normalize_result
 
     def normalized_result_with_structure(data, pages):
@@ -93,12 +86,6 @@ def _patch():
     main.EVALUATION_STALE_SECONDS = 10 * 60
     print("PRANA PRODUCTION PATCH ACTIVE: fast vision raster + low-thinking Gemini + stable Flash fallback")
 
-    # -----------------------------------------------------------------------
-    # Telegram worker fix
-    # -----------------------------------------------------------------------
-    # The legacy nested worker references `chat_id` from the parent handler,
-    # but the worker runs after that scope has returned. Replace it with a
-    # standalone worker that always derives the chat id from the message.
     def stable_telegram_worker(message, item, paper, status, source="trial"):
         chat_id = int(message.chat.id)
         try:
@@ -107,96 +94,50 @@ def _patch():
             try:
                 main.bot.edit_message_text(
                     f"⚠️ <b>Evaluation Error</b>\n\n{str(exc)[:300]}",
-                    chat_id=chat_id,
-                    message_id=status.message_id,
+                    chat_id=chat_id, message_id=status.message_id,
                 )
             except Exception:
-                try:
-                    main.bot.send_message(chat_id, f"⚠️ Evaluation error.\n{str(exc)[:300]}")
-                except Exception:
-                    pass
-            try:
-                Path(item["path"]).unlink(missing_ok=True)
-            except Exception:
-                pass
+                try: main.bot.send_message(chat_id, f"⚠️ Evaluation error.\n{str(exc)[:300]}")
+                except Exception: pass
+            try: Path(item["path"]).unlink(missing_ok=True)
+            except Exception: pass
             return
-
-        try:
-            Path(item["path"]).unlink(missing_ok=True)
-        except Exception:
-            pass
-
-        try:
-            main.bot.delete_message(chat_id=chat_id, message_id=status.message_id)
-        except Exception:
-            pass
-
+        try: Path(item["path"]).unlink(missing_ok=True)
+        except Exception: pass
+        try: main.bot.delete_message(chat_id=chat_id, message_id=status.message_id)
+        except Exception: pass
         original_name = item.get("filename", "submission.pdf")
         evaluated_filename = f"{Path(original_name).stem or 'submission'}_Evaluated.pdf"
         feedback = str(result.get("overall_feedback", "")).strip()
-        caption = (
-            f"🏛️ <b>PRANA PCS — {paper} Evaluation</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 <b>Obtained Marks:</b> <code>{result['total_obtained_marks']:g} / {result['total_max_marks']:g}</code>\n\n"
-            f"📝 <b>Language • Style • Presentation:</b> {feedback}"
-        )[:900]
-
+        caption = (f"🏛️ <b>PRANA PCS — {paper} Evaluation</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+                   f"🎯 <b>Obtained Marks:</b> <code>{result['total_obtained_marks']:g} / {result['total_max_marks']:g}</code>\n\n"
+                   f"📝 <b>Language • Style • Presentation:</b> {feedback}")[:900]
         try:
-            main.save_evaluation_to_database(
-                message, item, paper, result, evaluated_filename, final_pdf.getvalue()
-            )
+            main.save_evaluation_to_database(message, item, paper, result, evaluated_filename, final_pdf.getvalue())
         except Exception as exc:
             print("TELEGRAM DB SAVE WARNING:", repr(exc))
-
         try:
             markup = main.telebot.types.InlineKeyboardMarkup(row_width=2)
             markup.add(
-                main.telebot.types.InlineKeyboardButton(
-                    "Open Mini App",
-                    web_app=main.telebot.types.WebAppInfo(url=f"{main.PUBLIC_BASE_URL}/app")
-                ),
-                main.telebot.types.InlineKeyboardButton(
-                    "Performance",
-                    web_app=main.telebot.types.WebAppInfo(url=f"{main.PUBLIC_BASE_URL}/app?view=performance")
-                ),
+                main.telebot.types.InlineKeyboardButton("Open Mini App", web_app=main.telebot.types.WebAppInfo(url=f"{main.PUBLIC_BASE_URL}/app")),
+                main.telebot.types.InlineKeyboardButton("Performance", web_app=main.telebot.types.WebAppInfo(url=f"{main.PUBLIC_BASE_URL}/app?view=performance")),
             )
             markup.add(
-                main.telebot.types.InlineKeyboardButton(
-                    "Evaluation History",
-                    web_app=main.telebot.types.WebAppInfo(url=f"{main.PUBLIC_BASE_URL}/app?view=history")
-                ),
-                main.telebot.types.InlineKeyboardButton(
-                    "Evaluate Another Copy",
-                    web_app=main.telebot.types.WebAppInfo(url=f"{main.PUBLIC_BASE_URL}/app?view=evaluate")
-                ),
+                main.telebot.types.InlineKeyboardButton("Evaluation History", web_app=main.telebot.types.WebAppInfo(url=f"{main.PUBLIC_BASE_URL}/app?view=history")),
+                main.telebot.types.InlineKeyboardButton("Evaluate Another Copy", web_app=main.telebot.types.WebAppInfo(url=f"{main.PUBLIC_BASE_URL}/app?view=evaluate")),
             )
-            main.bot.send_document(
-                chat_id,
-                final_pdf,
-                visible_file_name=evaluated_filename,
-                caption=caption,
-                reply_markup=markup,
-            )
+            main.bot.send_document(chat_id, final_pdf, visible_file_name=evaluated_filename, caption=caption, reply_markup=markup)
         except Exception as exc:
             print("TELEGRAM SEND EVALUATED PDF ERROR:", repr(exc))
-            try:
-                main.bot.send_message(chat_id, f"⚠️ Evaluated PDF तैयार हुआ, लेकिन Telegram पर भेजने में समस्या हुई: {str(exc)[:220]}")
-            except Exception:
-                pass
+            try: main.bot.send_message(chat_id, f"⚠️ Evaluated PDF तैयार हुआ, लेकिन Telegram पर भेजने में समस्या हुई: {str(exc)[:220]}")
+            except Exception: pass
 
     main._run_telegram_evaluation = stable_telegram_worker
     print("PRANA TELEGRAM PATCH ACTIVE: stable chat-id scoped worker")
 
 _patch()
 
-# ---------------------------------------------------------------------------
-# Mini App auth stability patch
-# ---------------------------------------------------------------------------
-# evaluation_access() closes its SQLAlchemy session before returning. The
-# legacy /api/app/auth handler then reads trial fields from the returned ORM
-# object, which can raise DetachedInstanceError. Wrap only that function so
-# the existing evaluator remains untouched: return a detached-safe plain
-# object containing the four trial counters.
+# Mini App access/auth stability patch.
 def _patch_detached_user():
     try:
         import main
@@ -205,12 +146,27 @@ def _patch_detached_user():
 
         def safe_evaluation_access(uid, question_count=0, consume=False):
             allowed, source, _row = original(uid, question_count=question_count, consume=consume)
+
             copies_used = copies_limit = questions_used = questions_limit = 0
             if getattr(main, "DB_ENABLED", False) and getattr(main, "SessionLocal", None) is not None:
                 session = main.SessionLocal()
                 try:
                     current = session.get(main.DBUser, str(uid))
                     if current is not None:
+                        # Automatically activate Trial for a normal first-time
+                        # Mini App user. Admin/full/group access remains untouched.
+                        if (not allowed and not current.is_blocked and
+                                str(current.access_type or "none") in ("", "none")):
+                            current.access_type = "trial"
+                            current.is_allowed = False
+                            current.trial_copies_limit = int(current.trial_copies_limit or 3)
+                            current.trial_questions_limit = int(current.trial_questions_limit or 10)
+                            current.trial_copies_used = int(current.trial_copies_used or 0)
+                            current.trial_questions_used = int(current.trial_questions_used or 0)
+                            session.commit()
+                            allowed = True
+                            source = "trial"
+                            print(f"MINI APP TRIAL AUTO-ACTIVATED: {uid}")
                         copies_used = int(current.trial_copies_used or 0)
                         copies_limit = int(current.trial_copies_limit or 3)
                         questions_used = int(current.trial_questions_used or 0)
@@ -226,7 +182,7 @@ def _patch_detached_user():
             return allowed, source, safe_row
 
         main.evaluation_access = safe_evaluation_access
-        print("PRANA MINI APP AUTH PATCH ACTIVE: detached ORM user protected")
+        print("PRANA MINI APP AUTH PATCH ACTIVE: detached ORM protected + auto trial")
     except Exception as exc:
         print("PRANA MINI APP AUTH PATCH ERROR:", repr(exc))
 
