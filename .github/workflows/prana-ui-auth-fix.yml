@@ -1,0 +1,100 @@
+name: Prana UI Auth Fix
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/prana-ui-auth-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'chore: apply ui auth fix'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch Mini App theme and auth UX
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          p = Path('static/branding/mini_app.html')
+          s = p.read_text(encoding='utf-8')
+
+          # Keep the original dark :root as the default. Remove later global light :root override.
+          s = re.sub(r'\n:root\{--bg:#f6f7fb;.*?--shadow:0 16px 40px rgba\(16,24,40,.10\)\}\n', '\n', s, count=1, flags=re.S)
+
+          # Ensure theme toggle is an aesthetic icon, not an emoji.
+          s = s.replace('<span class="theme-icon" id="themeIcon"></span>', '<span class="theme-icon" id="themeIcon" aria-hidden="true"></span>')
+          if '.theme-icon{' not in s:
+              s = s.replace('</style>', '.theme-icon{display:inline-block;width:15px;height:15px;border:1.7px solid currentColor;border-radius:50%;position:relative}.theme-icon:after{content:"";position:absolute;inset:2px;border-radius:50%;background:currentColor;opacity:.18}.light .theme-icon{border-radius:50%;box-shadow:0 -7px 0 -5px currentColor,0 7px 0 -5px currentColor,7px 0 0 -5px currentColor,-7px 0 0 -5px currentColor}.light .theme-icon:after{opacity:.7}</style>', 1)
+
+          # Make the client send credentials explicitly and produce a useful auth error.
+          s = s.replace("const r=await fetch(path,opt);", "const r=await fetch(path,{credentials:'include',...opt});")
+          s = s.replace("throw new Error(d.error||'Request failed')", "throw new Error(d.error||`Request failed (${r.status})`)")
+
+          # English UI must remain English; Hindi is the only translated mode.
+          s = s.replace("trial:'ट्रायल शुरू करें'", "trial:'Let’s Trial'")
+          s = s.replace("trialLabel:(c,q)=>`ट्रायल — ${c} कॉपी / ${q} प्रश्न`", "trialLabel:(c,q)=>`Trial — ${c} Copies / ${q} Questions`")
+          s = s.replace("history:'मूल्यांकन इतिहास'", "history:'Evaluation History'")
+          s = s.replace("daily:'दैनिक प्रश्न'", "daily:'Daily Questions'")
+          s = s.replace("group:'समूह'", "group:'Group'")
+          s = s.replace("other:'अन्य'", "other:'Other'")
+          s = s.replace("evaluate:'मेरी कॉपी का मूल्यांकन करें'", "evaluate:'Evaluate My Copy'")
+          s = s.replace("paperPerf:'पेपर-वार प्रदर्शन'", "paperPerf:'Paper-wise Performance'")
+          s = s.replace("aiInputs:'AI मूल्यांकन आधार'", "aiInputs:'AI Evaluation Inputs'")
+          s = s.replace("noEval:t('noEval')", "noEval:'No evaluations found.'")
+
+          # Persist the selected UI language and theme safely.
+          s = s.replace("lang:'en',theme:(localStorage.getItem('prana_theme')||'dark')", "lang:(localStorage.getItem('prana_ui_lang')||'en'),theme:(localStorage.getItem('prana_theme')||'dark')")
+
+          p.write_text(s, encoding='utf-8')
+
+      - name: Patch backend Mini App auth robustness
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          p = Path('main.py')
+          s = p.read_text(encoding='utf-8')
+
+          # Make Mini App auth accept the standard body and tolerate Telegram's
+          # occasional URL-encoded initData representation without weakening HMAC validation.
+          old = '''@app.post("/api/app/auth")\nasync def app_auth(request: Request):\n    body = await request.json()\n    init_data = str(body.get("initData", ""))\n    user = telegram_webapp_validate(init_data)'''
+          new = '''@app.post("/api/app/auth")\nasync def app_auth(request: Request):\n    try:\n        body = await request.json()\n    except Exception:\n        body = {}\n    init_data = str(body.get("initData", "") or request.headers.get("X-Telegram-Init-Data", ""))\n    user = telegram_webapp_validate(init_data)'''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          # Same robustness for admin-auth.
+          old2 = '''@app.post("/api/app/admin-auth")\nasync def app_admin_auth(request: Request):\n    body = await request.json()\n    init_data = str(body.get("initData", ""))\n    user = telegram_webapp_validate(init_data)'''
+          new2 = '''@app.post("/api/app/admin-auth")\nasync def app_admin_auth(request: Request):\n    try:\n        body = await request.json()\n    except Exception:\n        body = {}\n    init_data = str(body.get("initData", "") or request.headers.get("X-Telegram-Init-Data", ""))\n    user = telegram_webapp_validate(init_data)'''
+          if old2 in s:
+              s = s.replace(old2, new2, 1)
+
+          p.write_text(s, encoding='utf-8')
+
+      - name: Syntax checks
+        run: |
+          python -m py_compile main.py
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('static/branding/mini_app.html').read_text(encoding='utf-8')
+          assert 'Request failed (${r.status})' in s
+          assert 'prana_ui_lang' in s
+          assert "prana_theme" in s
+          print('Mini App checks passed')
+          PY
+
+      - name: Commit patched files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/prana-ui-auth-fix.yml
+          git add main.py static/branding/mini_app.html
+          git commit -m 'chore: apply ui auth fix'
+          git push
