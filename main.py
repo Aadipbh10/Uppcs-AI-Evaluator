@@ -279,33 +279,56 @@ def ensure_new_schema():
 
 
 def parse_qa_pairs(raw_text):
-    """Parse Q1./ANS1. (Hindi or English) pairs from one upload."""
-    text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n")
-    # Normalize common labels: Q 1, Q-1, प्रश्न 1, ANS 1 etc.
-    text = re.sub(r"(?im)^\s*(?:प्रश्न|question)\s*[-.:]?\s*(\d+)\s*[).:-]?\s*", r"Q\1. ", text)
+    """Parse Q1./ANS1. pairs from plain text or rich-text HTML.
+
+    The marker itself defines the boundary: Q1. starts question 1 and
+    ANS1. starts answer 1; the same rule works for Hindi and English.
+    Rich-text HTML is retained inside the parsed question/model-answer.
+    """
+    raw = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n")
+    if "<" in raw and ">" in raw:
+        # Find markers anywhere in rich text, including <p>Q1...</p>.
+        marker = re.compile(r"(?is)(?:^|>)\s*(Q\s*(\d+)\s*[.):-]|ANS\s*(\d+)\s*[.):-])")
+        matches = list(marker.finditer(raw))
+        if matches:
+            qs = {}
+            for i, mt in enumerate(matches):
+                token = mt.group(1).upper()
+                num = int(mt.group(2) or mt.group(3))
+                kind = "q" if token.startswith("Q") else "a"
+                body_start = mt.end()
+                body_end = matches[i+1].start() if i+1 < len(matches) else len(raw)
+                body = raw[body_start:body_end].strip()
+                body = re.sub(r"^(?:\s|&nbsp;)+", "", body, flags=re.I)
+                body = re.sub(r"(?is)</(?:p|div|section|h[1-6])>\s*$", "", body).strip()
+                qs.setdefault(num, {})["question" if kind=="q" else "answer"] = body
+            result=[]
+            for num in sorted(qs):
+                row=qs[num]
+                if row.get("question"):
+                    result.append({"question_number":num,"question":row["question"],"model_answer":row.get("answer","")})
+            if result:
+                return result
+
+    text = re.sub(r"(?im)^\s*(?:प्रश्न|question)\s*[-.:]?\s*(\d+)\s*[).:-]?\s*", r"Q\1. ", raw)
     text = re.sub(r"(?im)^\s*(?:उत्तर|answer)\s*[-.:]?\s*(\d+)\s*[).:-]?\s*", r"ANS\1. ", text)
     qpat = re.compile(r"(?im)^\s*Q\s*(\d+)\s*[.):-]\s*(.*?)\s*$")
     apat = re.compile(r"(?im)^\s*ANS\s*(\d+)\s*[.):-]\s*(.*?)\s*$")
-    lines = text.splitlines()
+    rows=[]
     starts=[]
-    for i,line in enumerate(lines):
+    plain=text.splitlines()
+    for i,line in enumerate(plain):
         mq=qpat.match(line); ma=apat.match(line)
         if mq: starts.append((i,'q',int(mq.group(1)),mq.group(2).strip()))
         elif ma: starts.append((i,'a',int(ma.group(1)),ma.group(2).strip()))
-    starts.sort(key=lambda x:x[0])
+    for i,item in enumerate(starts):
+        line_no,kind,num,first=item
+        end_line=starts[i+1][0] if i+1<len(starts) else len(plain)
+        body="\n".join([first]+plain[line_no+1:end_line]).strip()
+        rows.append((kind,num,body))
     qs={}
-    for idx,item in enumerate(starts):
-        i,kind,num,first=item
-        end=starts[idx+1][0] if idx+1<len(starts) else len(lines)
-        body='\n'.join([first]+lines[i+1:end]).strip()
-        if kind=='q': qs.setdefault(num,{})['question']=body
-        else: qs.setdefault(num,{})['answer']=body
-    result=[]
-    for num in sorted(qs):
-        row=qs[num]
-        if row.get('question'):
-            result.append({'question_number':num,'question':row['question'],'model_answer':row.get('answer','')})
-    return result
+    for kind,num,body in rows: qs.setdefault(num,{})["question" if kind=="q" else "answer"]=body
+    return [{"question_number":n,"question":v["question"],"model_answer":v.get("answer","")} for n,v in sorted(qs.items()) if v.get("question")]
 
 
 def save_content_set(content_type, exam, paper, language, rubric='', content_date=None, year=None, title='', source_filename='', items=None, target_group_id=None):
@@ -360,6 +383,15 @@ def evaluation_access(uid, question_count=0, consume=False):
         u=s.get(DBUser,str(uid))
         if not u or u.is_blocked:
             return False,'blocked',u
+        if SUPER_ADMIN_TELEGRAM_ID and str(uid)==str(SUPER_ADMIN_TELEGRAM_ID):
+            u.is_allowed=True; u.access_type='full'; s.commit()
+            return True,'full',u
+        admin_row = s.execute(__import__("sqlalchemy").text(
+            "SELECT role,is_active FROM admin_users WHERE telegram_user_id=:uid LIMIT 1"
+        ), {"uid":str(uid)}).mappings().first()
+        if admin_row and admin_row["is_active"] and str(admin_row["role"]).lower() in ("admin","super_admin"):
+            u.is_allowed=True; u.access_type='full'; s.commit()
+            return True,'full',u
         if u.is_allowed or u.access_type=='full':
             return True,'full',u
         if u.access_type=='trial':
@@ -811,12 +843,15 @@ def save_submission(
 
 
 def ask_paper(message):
+    markup=telebot.types.InlineKeyboardMarkup()
+    markup.add(telebot.types.InlineKeyboardButton("Open Mini App", web_app=telebot.types.WebAppInfo(url=f"{PUBLIC_BASE_URL}/app")))
     bot.reply_to(
         message,
         "📄 <b>Copy Received.</b>\n\n"
         "Before evaluation, send the <b>Paper Name</b>:\n\n"
-        "• GS 1\n• GS 2\n• GS 3\n• GS 4\n• GS 5\n• GS 6\n• General Hindi\n• Essay (Hindi/English)\n\n"
-        "Example: <b>GS 3</b>"
+        "• GS 1\n• GS 2\n• GS 3\n• GS 4\n• GS 5\n• GS 6\n• General Hindi\n• Essay\n\n"
+        "Example: <b>GS 3</b>",
+        reply_markup=markup
     )
 
 
@@ -973,6 +1008,16 @@ IMPORTANT: LANGUAGE RULE
 
 UI language या Telegram language का answer-copy evaluation language
 पर कोई प्रभाव नहीं होना चाहिए।
+
+GENERAL HINDI RULE:
+- General Hindi paper is always assessed and commented in Hindi.
+- Do not ask the candidate to choose a medium for General Hindi.
+
+ESSAY RULE:
+- Detect the language actually used in the uploaded essay yourself.
+- If the essay is Hindi, all examiner comments, feedback and summary fields must be Hindi.
+- If the essay is English, all examiner comments, feedback and summary fields must be English.
+- Never rely on a UI medium selector for Essay.
 
 ============================================================
 DAILY MODEL ANSWER BENCHMARK
@@ -1426,7 +1471,7 @@ def call_gemini(
             response = requests.post(
                 url,
                 json=payload,
-                timeout=300
+                timeout=90
             )
 
             if response.status_code == 200:
@@ -3815,9 +3860,11 @@ def process_submission(
     result = call_gemini(
         images, paper, evaluation_type=evaluation_type, source_id=source_id, exam=exam
     )
-    result["exam"]=exam; result["evaluation_type"]=evaluation_type; result["source_id"]=source_id; result["medium"]=medium
-    if medium and not result.get("copy_language"):
-        result["copy_language"] = medium
+    result["exam"]=exam; result["evaluation_type"]=evaluation_type; result["source_id"]=source_id
+    # Paper language is AI-detected from the uploaded copy. Medium is not forced by UI.
+    if paper == "GENERAL_HINDI":
+        result["copy_language"] = "Hindi"
+    result["medium"] = result.get("copy_language") or ("Hindi" if paper=="GENERAL_HINDI" else None)
 
     final_pdf = annotate_pdf(
         pdf,
@@ -3898,6 +3945,19 @@ def telegram_chat_access_allowed(message):
         user = session.get(DBUser, uid) if uid else None
         if user and user.is_blocked:
             return False, "blocked"
+        is_privileged = bool(SUPER_ADMIN_TELEGRAM_ID and uid == SUPER_ADMIN_TELEGRAM_ID)
+        if not is_privileged:
+            try:
+                ar = session.execute(__import__("sqlalchemy").text(
+                    "SELECT role,is_active FROM admin_users WHERE telegram_user_id=:uid LIMIT 1"
+                ), {"uid":uid}).mappings().first()
+                is_privileged = bool(ar and ar["is_active"] and str(ar["role"]).lower() in ("admin","super_admin"))
+            except Exception:
+                is_privileged = False
+        if is_privileged:
+            if user:
+                user.is_allowed=True; user.access_type="full"; session.commit()
+            return True, "full"
         if user and (user.is_allowed or user.access_type in ("full", "trial")):
             if user.access_type == "trial" and int(user.trial_copies_used or 0) >= int(user.trial_copies_limit or 3):
                 return False, "trial_copies_exhausted"
@@ -3956,7 +4016,9 @@ if bot:
 
             allowed, source = telegram_chat_access_allowed(message)
             if not allowed:
-                bot.reply_to(message, "🔒 <b>Access Denied</b>\n\nYour Telegram account or authorized Telegram group does not have access. Please contact PRANA PCS admin.")
+                markup=telebot.types.InlineKeyboardMarkup()
+                markup.add(telebot.types.InlineKeyboardButton("Let’s Trial", web_app=telebot.types.WebAppInfo(url=f"{PUBLIC_BASE_URL}/app")))
+                bot.reply_to(message, "🔒 <b>Access Denied</b>\n\nEvaluation access is not enabled. You can start your Trial from the Mini App.", reply_markup=markup)
                 return
 
             if message.content_type == "document":
@@ -4084,140 +4146,159 @@ if bot:
             "Page-by-page evaluation and examiner-style checking has started..."
         )
 
-        try:
+        import threading
+        threading.Thread(
+            target=_run_telegram_evaluation,
+            args=(message, item, paper, status),
+            daemon=True
+        ).start()
 
-            final_pdf, result = (
-                process_submission(
-                    item["path"],
-                    paper
-                )
-            )
 
+    def _run_telegram_evaluation(message, item, paper, status):
             try:
 
-                os.remove(
-                    item["path"]
+                final_pdf, result = (
+                    process_submission(
+                        item["path"],
+                        paper
+                    )
                 )
 
-            except Exception:
-                pass
-
-            try:
-
-                bot.delete_message(
-                    chat_id,
-                    status.message_id
-                )
-
-            except Exception:
-                pass
-
-            # ------------------------------------------------
-            # SHORT TELEGRAM CAPTION
-            # ------------------------------------------------
-
-            feedback = str(
-                result.get(
-                    "overall_feedback",
-                    ""
-                )
-            ).strip()
-
-            caption = (
-                f"🏛️ <b>PRANA PCS — {paper} Evaluation</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎯 <b>Obtained Marks:</b> "
-                f"<code>"
-                f"{result['total_obtained_marks']:g} / "
-                f"{result['total_max_marks']:g}"
-                f"</code>\n\n"
-                f"📝 <b>Language • Style • Presentation:</b> "
-                f"{feedback}"
-            )
-
-            # Telegram caption safety.
-            caption = caption[:900]
-
-            # ------------------------------------------------
-            # ORIGINAL NAME + _Evaluated
-            # ------------------------------------------------
-
-            original_name = item.get(
-                "filename",
-                "submission.pdf"
-            )
-
-            original_stem = (
-                Path(original_name).stem
-                or "submission"
-            )
-
-            evaluated_filename = (
-                f"{original_stem}_Evaluated.pdf"
-            )
-
-            # Save complete evaluation for Mini App/Admin Panel.
-            # If PostgreSQL fails, the student still receives the evaluated PDF.
-            # Trial quota is consumed only after a successful evaluation.
-            if source == "trial":
-                s_trial=SessionLocal()
                 try:
-                    u_trial=s_trial.get(DBUser,str(message.from_user.id))
-                    if u_trial and u_trial.access_type=="trial":
-                        qcount=len(result.get("questions",[]))
-                        if int(u_trial.trial_copies_used or 0) >= int(u_trial.trial_copies_limit or 3) or int(u_trial.trial_questions_used or 0)+qcount > int(u_trial.trial_questions_limit or 10):
-                            bot.reply_to(message,"🔒 <b>Trial Limit Reached</b>\n\nTrial access is limited to 3 copies or 10 questions.")
-                            return
-                        u_trial.trial_copies_used += 1; u_trial.trial_questions_used += qcount; s_trial.commit()
-                finally:
-                    s_trial.close()
 
-            save_evaluation_to_database(
-                message,
-                item,
-                paper,
-                result,
-                evaluated_filename,
-                final_pdf.getvalue()
-            )
+                    os.remove(
+                        item["path"]
+                    )
 
-            bot.send_document(
-                chat_id,
-                final_pdf,
-                visible_file_name=evaluated_filename,
-                caption=caption
-            )
+                except Exception:
+                    pass
 
-        except Exception as e:
+                try:
 
-            try:
+                    bot.delete_message(
+                        chat_id,
+                        status.message_id
+                    )
 
-                os.remove(
-                    item["path"]
+                except Exception:
+                    pass
+
+                # ------------------------------------------------
+                # SHORT TELEGRAM CAPTION
+                # ------------------------------------------------
+
+                feedback = str(
+                    result.get(
+                        "overall_feedback",
+                        ""
+                    )
+                ).strip()
+
+                caption = (
+                    f"🏛️ <b>PRANA PCS — {paper} Evaluation</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🎯 <b>Obtained Marks:</b> "
+                    f"<code>"
+                    f"{result['total_obtained_marks']:g} / "
+                    f"{result['total_max_marks']:g}"
+                    f"</code>\n\n"
+                    f"📝 <b>Language • Style • Presentation:</b> "
+                    f"{feedback}"
                 )
 
-            except Exception:
-                pass
+                # Telegram caption safety.
+                caption = caption[:900]
 
-            try:
+                # ------------------------------------------------
+                # ORIGINAL NAME + _Evaluated
+                # ------------------------------------------------
 
-                bot.edit_message_text(
-                    (
-                        "⚠️ <b>Evaluation Error</b>\n\n"
-                        f"{str(e)[:300]}"
-                    ),
-                    chat_id=chat_id,
-                    message_id=status.message_id
+                original_name = item.get(
+                    "filename",
+                    "submission.pdf"
                 )
 
-            except Exception:
+                original_stem = (
+                    Path(original_name).stem
+                    or "submission"
+                )
 
-                bot.send_message(
+                evaluated_filename = (
+                    f"{original_stem}_Evaluated.pdf"
+                )
+
+                # Save complete evaluation for Mini App/Admin Panel.
+                # If PostgreSQL fails, the student still receives the evaluated PDF.
+                # Trial quota is consumed only after a successful evaluation.
+                if source == "trial":
+                    s_trial=SessionLocal()
+                    try:
+                        u_trial=s_trial.get(DBUser,str(message.from_user.id))
+                        if u_trial and u_trial.access_type=="trial":
+                            qcount=len(result.get("questions",[]))
+                            if int(u_trial.trial_copies_used or 0) >= int(u_trial.trial_copies_limit or 3) or int(u_trial.trial_questions_used or 0)+qcount > int(u_trial.trial_questions_limit or 10):
+                                bot.reply_to(message,"🔒 <b>Trial Limit Reached</b>\n\nTrial access is limited to 3 copies or 10 questions.")
+                                return
+                            u_trial.trial_copies_used += 1; u_trial.trial_questions_used += qcount; s_trial.commit()
+                    finally:
+                        s_trial.close()
+
+                submission_id = save_evaluation_to_database(
+                    message,
+                    item,
+                    paper,
+                    result,
+                    evaluated_filename,
+                    final_pdf.getvalue()
+                )
+
+                markup=telebot.types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    telebot.types.InlineKeyboardButton("Open Mini App", web_app=telebot.types.WebAppInfo(url=f"{PUBLIC_BASE_URL}/app")),
+                    telebot.types.InlineKeyboardButton("Performance", web_app=telebot.types.WebAppInfo(url=f"{PUBLIC_BASE_URL}/app?view=performance")),
+                )
+                markup.add(
+                    telebot.types.InlineKeyboardButton("Evaluation History", web_app=telebot.types.WebAppInfo(url=f"{PUBLIC_BASE_URL}/app?view=history")),
+                    telebot.types.InlineKeyboardButton("Evaluate Another Copy", web_app=telebot.types.WebAppInfo(url=f"{PUBLIC_BASE_URL}/app?view=evaluate")),
+                )
+                bot.send_document(
                     chat_id,
-
-                    "⚠️ Evaluation error.\n"
-                    f"{str(e)[:300]}"
+                    final_pdf,
+                    visible_file_name=evaluated_filename,
+                    caption=caption,
+                    reply_markup=markup
                 )
+
+            except Exception as e:
+
+                try:
+
+                    os.remove(
+                        item["path"]
+                    )
+
+                except Exception:
+                    pass
+
+                try:
+
+                    bot.edit_message_text(
+                        (
+                            "⚠️ <b>Evaluation Error</b>\n\n"
+                            f"{str(e)[:300]}"
+                        ),
+                        chat_id=chat_id,
+                        message_id=status.message_id
+                    )
+
+                except Exception:
+
+                    bot.send_message(
+                        chat_id,
+
+                        "⚠️ Evaluation error.\n"
+                        f"{str(e)[:300]}"
+                    )
 
 # ============================================================
 # DATABASE HEALTH / STATISTICS API
@@ -4475,8 +4556,16 @@ button,input,select,textarea{font:inherit}.top{position:sticky;top:0;z-index:20;
 <section id="users" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Student</h2><p style="color:#667085;margin-top:-8px">केवल Telegram User ID डालकर student जोड़ें और access तुरंत enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1fr auto"><input id="newStudentId" class="input" placeholder="Telegram User ID"><select id="newStudentAccess" class="input"><option value="full">Full Access</option><option value="trial">Trial — 3 copies / 10 questions</option><option value="none">No Evaluation Access</option></select><button class="btn green" onclick="addStudent()">➕ Add Student</button></div></div><div class="sectionhead"><div><h2>👥 Students / Users</h2><p style="color:#667085;margin-top:-8px">Access, submissions और individual performance manage करें।</p></div><div class="toolbar"><input id="userSearch" class="input search" placeholder="Telegram ID / name / username" oninput="filterUsers()"><button class="btn ghost" onclick="loadUsers()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>User</th><th>Status</th><th>Copies</th><th>Average</th><th>Last Seen</th><th>Access</th><th>Performance</th></tr></thead><tbody id="usersBody"></tbody></table></div></section>
 <section id="groups" class="tabsec hidden"><div class="card"><div class="sectionhead"><div><h2>➕ Add Telegram Group</h2><p style="color:#667085;margin-top:-8px">केवल Telegram Group ID डालकर group जोड़ें और access enable करें।</p></div></div><div class="formgrid" style="grid-template-columns:1fr auto"><input id="newGroupId" class="input" placeholder="Telegram Group ID (जैसे -100...)"><button class="btn green" onclick="addGroup()">➕ Add Group</button></div></div><div class="sectionhead"><div><h2>👥 Telegram Groups</h2><p style="color:#667085;margin-top:-8px">पूरे Telegram group को access दे या हटाएँ।</p></div><button class="btn ghost" onclick="loadGroups()">↻ Refresh</button></div><div class="tablewrap"><table class="table"><thead><tr><th>Group</th><th>Type</th><th>Status</th><th>Last Seen</th><th>Access</th></tr></thead><tbody id="groupsBody"></tbody></table></div></section>
 <section id="submissions" class="tabsec hidden"><div class="sectionhead"><div><h2>📄 Evaluated Copies</h2><p style="color:#667085;margin-top:-8px">हर evaluation की details, marks और PDF.</p></div><div class="toolbar"><select id="subPaper" class="input" onchange="loadSubmissions()"><option value="">All Papers</option><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option></select><input id="subSearch" class="input search" placeholder="User ID / filename" oninput="filterSubs()"><button class="btn ghost" onclick="loadSubmissions()">↻</button></div></div><div class="tablewrap"><table class="table"><thead><tr><th>Date</th><th>User</th><th>Paper</th><th>Marks</th><th>Language</th><th>Filename</th><th>Actions</th></tr></thead><tbody id="subsBody"></tbody></table></div></section>
-<section id="content" class="tabsec hidden"><div class="card" style="border:2px solid #dbe7ff"><h2>📥 Daily Questions — Questions + Model Answers + Rubric</h2><p style="color:#667085">Questions + Model Answers एक file में Q1./ANS1., Q2./ANS2. ... format में upload करें। Parser automatically question और answer अलग करेगा। Hindi और English date-wise अलग रहेंगे।</p><div class="formgrid"><input id="dqDate" class="input" type="date"><select id="dqLang" class="input"><option>Hindi</option><option>English</option></select><select id="dqPaper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option><option>GENERAL_HINDI</option><option>ESSAY</option></select></div><label>1️⃣ Questions + Model Answers</label><input id="dqFile" class="input" type="file" accept=".txt,.text,.md" required><label style="display:block;margin-top:10px">2️⃣ Rubric</label><input id="dqRubricFile" class="input" type="file" accept=".txt,.text,.md" required><div class="toolbar" style="margin-top:10px"><button class="btn blue" onclick="uploadDQ()">💾 Save Daily Questions + Rubric</button><button class="btn green" onclick="sendDQ()">📨 Send DQ PDF on Chat</button></div><small id="dqStatus" style="color:#667085"></small></div><div class="card"><div class="sectionhead"><div><h2>📝 Daily Questions + Model Answers</h2><p style="color:#667085;margin-top:-8px">Manual bulk entry भी उपलब्ध है।</p></div><div class="toolbar"><button class="btn blue" onclick="sendContentPdf()">📨 Send PDF on Chat</button><button class="btn ghost" onclick="addQuestionRow()">➕ Add Question</button></div></div><div id="bulkQuestions"></div><div class="toolbar" style="margin-top:12px"><button class="btn green" onclick="saveBulkContent()">💾 Save All Questions</button><button class="btn ghost" onclick="clearQuestionRows()">Clear Draft</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Created</th><th>Action</th></tr></thead><tbody id="contentBody"></tbody></table></div></section>
-<section id="pyqs" class="tabsec hidden"><div class="card" style="border:2px solid #dbe7ff"><h2>📚 PYQ Upload</h2><p style="color:#667085">Exam + Year + Paper + Language चुनें। Questions + Model Answers file Q1./ANS1. format में और Rubric अलग file में upload करें। Maximum 20 questions। केवल uploaded और rubric-complete PYQs evaluation में selectable होंगे।</p><div class="formgrid"><select id="pyqExam" class="input"><option value="UPPCS">UPPCS</option><option value="BPSC">BPSC</option><option value="RO_ARO">RO/ARO</option><option value="BEO">BEO</option></select><input id="pyqYear" class="input" type="number" placeholder="Year"><select id="pyqPaper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option><option>GENERAL_HINDI</option><option>ESSAY</option></select><select id="pyqLang" class="input"><option>Hindi</option><option>English</option></select></div><label>1️⃣ Questions + Model Answers (Q1./ANS1. ... maximum 20)</label><input id="pyqFile" class="input" type="file" accept=".txt,.text,.md" required><label style="display:block;margin-top:10px">2️⃣ Rubric</label><input id="pyqRubricFile" class="input" type="file" accept=".txt,.text,.md" required><div class="toolbar" style="margin-top:10px"><button class="btn blue" onclick="uploadPYQ()">💾 Save PYQ + Rubric</button></div><small id="pyqStatus" style="color:#667085"></small></div><div class="section tablewrap"><table class="table"><thead><tr><th>Exam</th><th>Year</th><th>Paper</th><th>Language</th><th>Questions</th><th>Rubric</th><th>Action</th></tr></thead><tbody id="pyqBody"></tbody></table></div></section>
+<section id="content" class="tabsec hidden"><div class="card" style="border:2px solid #dbe7ff"><h2>📥 Daily Questions — Questions + Model Answers + Rubric</h2><p style="color:#667085">Questions + Model Answers एक file में Q1./ANS1., Q2./ANS2. ... format में upload करें। Parser automatically question और answer अलग करेगा। Hindi और English date-wise अलग रहेंगे।</p><div class="formgrid"><input id="dqDate" class="input" type="date"><select id="dqLang" class="input"><option>Hindi</option><option>English</option></select><select id="dqPaper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option><option>GENERAL_HINDI</option><option>ESSAY</option></select></div><label>1. Questions + Model Answers — paste or upload</label>
+<div id="dqPaste" class="input" contenteditable="true" style="min-height:180px;line-height:1.55;margin-top:6px" data-placeholder="Q1. Question...&#10;ANS1. Model Answer...&#10;Q2. Question...&#10;ANS2. Model Answer..."></div>
+<input id="dqFile" class="input" type="file" accept=".txt,.text,.md,.html,.htm" style="margin-top:8px">
+<small style="display:block;color:#667085;margin-top:5px">Q1./ANS1. parser. Rich-text HTML is supported and preserved.</small>
+<label style="display:block;margin-top:10px">2. Rubric</label><input id="dqRubricFile" class="input" type="file" accept=".txt,.text,.md,.html,.htm" required><div class="toolbar" style="margin-top:10px"><button class="btn blue" onclick="uploadDQ()">💾 Save Daily Questions + Rubric</button><button class="btn green" onclick="sendDQ()">📨 Send DQ PDF on Chat</button></div><small id="dqStatus" style="color:#667085"></small></div><div class="card"><div class="sectionhead"><div><h2>📝 Daily Questions + Model Answers</h2><p style="color:#667085;margin-top:-8px">Manual bulk entry भी उपलब्ध है।</p></div><div class="toolbar"><button class="btn blue" onclick="sendContentPdf()">📨 Send PDF on Chat</button><button class="btn ghost" onclick="addQuestionRow()">➕ Add Question</button></div></div><div id="bulkQuestions"></div><div class="toolbar" style="margin-top:12px"><button class="btn green" onclick="saveBulkContent()">💾 Save All Questions</button><button class="btn ghost" onclick="clearQuestionRows()">Clear Draft</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>ID</th><th>Paper</th><th>Language</th><th>Question</th><th>Created</th><th>Action</th></tr></thead><tbody id="contentBody"></tbody></table></div></section>
+<section id="pyqs" class="tabsec hidden"><div class="card" style="border:2px solid #dbe7ff"><h2>📚 PYQ Upload</h2><p style="color:#667085">Exam + Year + Paper + Language चुनें। Questions + Model Answers file Q1./ANS1. format में और Rubric अलग file में upload करें। Maximum 20 questions। केवल uploaded और rubric-complete PYQs evaluation में selectable होंगे।</p><div class="formgrid"><select id="pyqExam" class="input"><option value="UPPCS">UPPCS</option><option value="BPSC">BPSC</option><option value="RO_ARO">RO/ARO</option><option value="BEO">BEO</option></select><input id="pyqYear" class="input" type="number" placeholder="Year"><select id="pyqPaper" class="input"><option>GS1</option><option>GS2</option><option>GS3</option><option>GS4</option><option>GS5</option><option>GS6</option><option>GENERAL_HINDI</option><option>ESSAY</option></select><select id="pyqLang" class="input"><option>Hindi</option><option>English</option></select></div><label>1. Questions + Model Answers — paste or upload (maximum 20)</label>
+<div id="pyqPaste" class="input" contenteditable="true" style="min-height:180px;line-height:1.55;margin-top:6px" data-placeholder="Q1. Question...&#10;ANS1. Model Answer..."></div>
+<input id="pyqFile" class="input" type="file" accept=".txt,.text,.md,.html,.htm" style="margin-top:8px">
+<small style="display:block;color:#667085;margin-top:5px">Q1./ANS1. parser. Rich-text HTML is supported and preserved.</small>
+<label style="display:block;margin-top:10px">2. Rubric</label><input id="pyqRubricFile" class="input" type="file" accept=".txt,.text,.md,.html,.htm" required><div class="toolbar" style="margin-top:10px"><button class="btn blue" onclick="uploadPYQ()">💾 Save PYQ + Rubric</button></div><small id="pyqStatus" style="color:#667085"></small></div><div class="section tablewrap"><table class="table"><thead><tr><th>Exam</th><th>Year</th><th>Paper</th><th>Language</th><th>Questions</th><th>Rubric</th><th>Action</th></tr></thead><tbody id="pyqBody"></tbody></table></div></section>
 <section id="admins" class="tabsec hidden"><div class="card"><h2>👑 Admin Management</h2><p>केवल Super Admin दूसरे Admin accounts जोड़/हटा सकता है।</p><div class="toolbar"><input id="adminId" class="input" placeholder="Telegram User ID"><button class="btn blue" onclick="addAdmin()">➕ Add Admin</button></div></div><div class="section tablewrap"><table class="table"><thead><tr><th>Telegram ID</th><th>Role</th><th>Status</th><th>Last Login</th><th>Action</th></tr></thead><tbody id="adminsBody"></tbody></table></div></section>
 </div></div>
 <div id="modal" class="modal hidden" onclick="if(event.target===this)closeModal()"><div class="modalbox"><button class="btn gray close" onclick="closeModal()">Close</button><div id="modalBody"></div></div></div>
@@ -4529,9 +4618,10 @@ async function loadAdmins(){try{let d=await api('/api/admin/admins');adminsBody.
 async function addAdmin(){let id=adminId.value.trim();if(!/^\\d+$/.test(id))return alert('Numeric Telegram User ID डालें');await api('/api/admin/admins',{method:'POST',body:JSON.stringify({telegram_user_id:id})});adminId.value='';loadAdmins()}
 async function removeAdmin(id){if(!confirm('इस Admin का access हटाना है?'))return;await api('/api/admin/admins/'+encodeURIComponent(id),{method:'DELETE'});loadAdmins()}
 async function readTextFile(input){let f=input&&input.files&&input.files[0];return f?await f.text():''}
-async function uploadDQ(){try{let qa=await readTextFile(document.getElementById('dqFile'));let rubric=await readTextFile(document.getElementById('dqRubricFile'));if(!qa)return alert('Questions + Model Answers file upload करें');if(!rubric)return alert('Rubric file upload करें');let d=await api('/api/admin/daily/upload',{method:'POST',body:JSON.stringify({date:dqDate.value||new Date().toISOString().slice(0,10),language:dqLang.value,paper:dqPaper.value,qa_text:qa,rubric:rubric})});dqStatus.textContent='✅ '+d.count+' questions + Rubric saved. Set: '+d.set_id;loadContent()}catch(e){dqStatus.textContent='❌ '+e.message}}
-async function sendDQ(){try{let d=await api('/api/admin/dq/send-pdf?content_date='+(encodeURIComponent(dqDate.value||''))+'&language='+encodeURIComponent(dqLang.value),{method:'POST'});alert('✅ '+(d.message||'DQ PDF sent.'))}catch(e){alert(e.message)}}
-async function uploadPYQ(){try{let qa=await readTextFile(pyqFile);let rubric=await readTextFile(pyqRubricFile);if(!qa)return alert('Questions + Model Answers file upload करें');if(!rubric)return alert('Rubric file upload करें');let d=await api('/api/admin/pyq/upload',{method:'POST',body:JSON.stringify({exam:pyqExam.value,year:pyqYear.value,paper:pyqPaper.value,language:pyqLang.value,qa_text:qa,rubric:rubric})});pyqStatus.textContent='✅ '+d.count+' questions + Rubric saved. Set: '+d.set_id;window.lastPYQSet=d.set_id;loadPYQs()}catch(e){pyqStatus.textContent='❌ '+e.message}}
+function richInput(id,fileId){let box=document.getElementById(id),html=(box?.innerHTML||'').trim();return html&&html!=='<br>'?html:readTextFile(document.getElementById(fileId))}
+async function uploadDQ(){try{let qa=await richInput('dqPaste','dqFile');let rubric=await readTextFile(document.getElementById('dqRubricFile'));if(!qa)return alert('Questions + Model Answers paste or upload करें');if(!rubric)return alert('Rubric file upload करें');let d=await api('/api/admin/daily/upload',{method:'POST',body:JSON.stringify({date:dqDate.value||new Date().toISOString().slice(0,10),language:dqLang.value,paper:dqPaper.value,qa_text:qa,rubric:rubric})});dqStatus.textContent='Saved: '+d.count+' questions + Rubric. Set: '+d.set_id;loadContent()}catch(e){dqStatus.textContent='Error: '+e.message}}
+async function sendDQ(){try{let d=await api('/api/admin/dq/send-pdf?content_date='+(encodeURIComponent(dqDate.value||''))+'&language='+encodeURIComponent(dqLang.value),{method:'POST'});alert(d.message||'DQ PDF sent.')}catch(e){alert(e.message)}}
+async function uploadPYQ(){try{let qa=await richInput('pyqPaste','pyqFile');let rubric=await readTextFile(document.getElementById('pyqRubricFile'));if(!qa)return alert('Questions + Model Answers paste or upload करें');if(!rubric)return alert('Rubric file upload करें');let d=await api('/api/admin/pyq/upload',{method:'POST',body:JSON.stringify({exam:pyqExam.value,year:pyqYear.value,paper:pyqPaper.value,language:pyqLang.value,qa_text:qa,rubric:rubric})});pyqStatus.textContent='Saved: '+d.count+' questions + Rubric. Set: '+d.set_id;window.lastPYQSet=d.set_id;loadPYQs()}catch(e){pyqStatus.textContent='Error: '+e.message}}
 async function loadPYQs(){try{let d=await api('/api/admin/content-sets');let rows=(d.items||[]).filter(x=>x.content_type==='pyq');pyqBody.innerHTML=rows.map(x=>`<tr><td>${esc(x.exam)}</td><td>${esc(x.year||'-')}</td><td>${esc(x.paper)}</td><td>${esc(x.language)}</td><td>${esc(x.question_count||0)}</td><td>${x.rubric?'✅ Uploaded':'❌ Missing'}</td><td><button class="btn ghost" onclick="prompt('Set ID', '${esc(x.id)}')">ID</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">No PYQ uploaded.</td></tr>'}catch(e){pyqStatus.textContent='❌ '+e.message}}
 function closeModal(){modal.classList.add('hidden');modalBody.innerHTML=''}
 show();
@@ -4664,7 +4754,15 @@ async def admin_add_admin(request: Request):
     if uid==SUPER_ADMIN_TELEGRAM_ID:return {"ok":False,"error":"Already Super Admin"}
     s=SessionLocal()
     try:
-        now=_utcnow(); s.execute(__import__("sqlalchemy").text("INSERT INTO admin_users(telegram_user_id,role,is_active,created_at) VALUES (:uid,'admin',TRUE,:now) ON CONFLICT (telegram_user_id) DO UPDATE SET role='admin',is_active=TRUE"),{"uid":uid,"now":now}); s.commit(); return {"ok":True}
+        now=_utcnow()
+        s.execute(__import__("sqlalchemy").text("INSERT INTO admin_users(telegram_user_id,role,is_active,created_at) VALUES (:uid,'admin',TRUE,:now) ON CONFLICT (telegram_user_id) DO UPDATE SET role='admin',is_active=TRUE"),{"uid":uid,"now":now})
+        u=s.get(DBUser,uid)
+        if u is None:
+            u=DBUser(telegram_user_id=uid,is_allowed=True,is_blocked=False,access_type='full',created_at=now,last_seen_at=now)
+            s.add(u)
+        else:
+            u.is_allowed=True; u.is_blocked=False; u.access_type='full'; u.last_seen_at=now
+        s.commit(); return {"ok":True}
     finally:s.close()
 
 @app.delete("/api/admin/admins/{user_id}")
@@ -5372,6 +5470,39 @@ def student_mini_app():
     return HTMLResponse(content=html, media_type="text/html")
 
 
+@app.post("/api/app/start-trial")
+def app_start_trial(request: Request):
+    uid = require_app_user(request)
+    if not uid:
+        return app_error("Unauthorized", 401)
+    if not DB_ENABLED or SessionLocal is None:
+        return app_error("Database unavailable.", 503)
+    s=SessionLocal()
+    try:
+        u=s.get(DBUser,str(uid))
+        if not u:
+            return app_error("User not found.",404)
+        if u.is_blocked:
+            return app_error("This account is blocked.",403)
+        if SUPER_ADMIN_TELEGRAM_ID and str(uid)==str(SUPER_ADMIN_TELEGRAM_ID):
+            u.is_allowed=True; u.access_type="full"
+        else:
+            admin=s.execute(__import__("sqlalchemy").text(
+                "SELECT role,is_active FROM admin_users WHERE telegram_user_id=:uid LIMIT 1"
+            ),{"uid":str(uid)}).mappings().first()
+            if admin and admin["is_active"]:
+                u.is_allowed=True; u.access_type="full"
+            elif u.access_type in ("none",""):
+                u.access_type="trial"; u.is_allowed=False
+                u.trial_copies_limit=int(u.trial_copies_limit or 3)
+                u.trial_questions_limit=int(u.trial_questions_limit or 10)
+                u.trial_copies_used=int(u.trial_copies_used or 0)
+                u.trial_questions_used=int(u.trial_questions_used or 0)
+        s.commit()
+        return {"ok":True,"access_type":u.access_type,"trial_copies_used":int(u.trial_copies_used or 0),"trial_copies_limit":int(u.trial_copies_limit or 3),"trial_questions_used":int(u.trial_questions_used or 0),"trial_questions_limit":int(u.trial_questions_limit or 10)}
+    finally:
+        s.close()
+
 @app.post("/api/app/auth")
 async def app_auth(request: Request):
     body = await request.json()
@@ -5581,22 +5712,48 @@ def app_dashboard(request: Request):
 
 
 @app.get("/api/app/daily")
-def app_daily(request: Request, language: str = "Hindi"):
+def app_daily(request: Request, language: str = "Hindi", content_date: str = "", paper: str = ""):
     uid = require_app_user(request)
     if not uid:
         return app_error("Unauthorized", 401)
     ensure_new_schema()
     lang = "English" if str(language).lower().startswith("en") else "Hindi"
+    params=[lang, str(content_date or ""), str(content_date or ""), str(paper or "").upper()]
     with engine.connect() as conn:
         rows=conn.exec_driver_sql("""SELECT cs.id,cs.id AS set_id,cs.paper,cs.language,cs.content_date,ci.question_number,ci.question,ci.model_answer
             FROM content_sets cs JOIN content_items ci ON ci.set_id=cs.id
             WHERE cs.content_type='daily' AND cs.is_active=TRUE AND cs.language=%s
-            ORDER BY cs.content_date DESC NULLS LAST,ci.question_number""",(lang,)).mappings().all()
+              AND (%s='' OR CAST(cs.content_date AS TEXT)=%s)
+              AND (%s='' OR cs.paper=%s)
+            ORDER BY cs.content_date DESC NULLS LAST,cs.paper,ci.question_number""",(lang,str(content_date or ""),str(content_date or ""),str(paper or "").upper(),str(paper or "").upper())).mappings().all()
     return {"ok":True,"items":[dict(r) for r in rows]}
 
 
+@app.get("/api/app/performance")
+def app_performance(request: Request, paper: str = ""):
+    uid=require_app_user(request)
+    if not uid: return app_error("Unauthorized",401)
+    paper=str(paper or "").upper().strip()
+    s=SessionLocal()
+    try:
+        q=s.query(DBSubmission).filter(DBSubmission.telegram_user_id==uid,DBSubmission.status=="completed")
+        if paper:q=q.filter(DBSubmission.paper==paper)
+        rows=q.order_by(desc(DBSubmission.created_at)).all()
+        total_ob=sum(float(x.total_obtained_marks or 0) for x in rows); total_max=sum(float(x.total_max_marks or 0) for x in rows)
+        mistakes=[]; strengths=[]
+        for sub in rows[:20]:
+            qs=s.query(DBQuestion).filter(DBQuestion.submission_id==sub.id).all()
+            for qrow in qs:
+                if qrow.skipped_parts: mistakes.append(f"{sub.paper} Q{qrow.question_number}: " + ", ".join(map(str,qrow.skipped_parts)))
+                if float(qrow.max_marks or 0) and float(qrow.obtained_marks or 0) >= float(qrow.max_marks or 0)*.75:
+                    strengths.append(f"{sub.paper} Q{qrow.question_number}: strong coverage")
+        return {"ok":True,"paper":paper,"percentage":round(total_ob/total_max*100,1) if total_max else 0,"submissions":len(rows),
+                "recent":[{"id":x.id,"paper":x.paper,"exam":x.exam,"evaluation_type":x.evaluation_type,"obtained":x.total_obtained_marks,"max":x.total_max_marks,"language":x.copy_language} for x in rows[:20]],
+                "mistakes":mistakes[:20],"strengths":strengths[:20]}
+    finally:s.close()
+
 @app.get("/api/app/evaluations")
-def app_evaluations(request: Request, paper: str = "", limit: int = 50):
+def app_evaluations(request: Request, paper: str = "", exam: str = "", evaluation_type: str = "", limit: int = 50):
     uid = require_app_user(request)
     if not uid:
         return app_error("Unauthorized", 401)
@@ -5606,9 +5763,10 @@ def app_evaluations(request: Request, paper: str = "", limit: int = 50):
             DBSubmission.telegram_user_id == uid,
             DBSubmission.status == "completed"
         ).order_by(desc(DBSubmission.created_at))
-        if paper:
-            q = q.filter(DBSubmission.paper == paper.upper())
-        rows = q.limit(min(max(int(limit), 1), 100)).all()
+        if paper: q = q.filter(DBSubmission.paper == paper.upper())
+        if exam: q = q.filter(DBSubmission.exam == exam.upper())
+        if evaluation_type: q = q.filter(DBSubmission.evaluation_type == evaluation_type.upper())
+        rows = q.limit(min(max(int(limit), 1), 200)).all()
         return {"ok": True, "items": [{
             "id": x.id,
             "paper": x.paper,
