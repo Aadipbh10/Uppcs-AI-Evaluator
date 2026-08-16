@@ -8,6 +8,7 @@ import re
 from datetime import datetime, timezone, date
 import requests
 from pathlib import Path
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from fastapi import FastAPI, Request, UploadFile, File, BackgroundTasks, Form
 import telebot
@@ -91,7 +92,7 @@ if DB_ENABLED:
             pool_recycle=300,
             connect_args={"connect_timeout": 10},
         )
-        SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
         print("DATABASE CONFIGURED: PostgreSQL")
     except Exception as e:
         DB_ENABLED = False
@@ -382,40 +383,95 @@ def get_content_reference(evaluation_type, source_id=None, paper=None, exam='UPP
         print('CONTENT REFERENCE ERROR:',e); return ''
 
 
-def evaluation_access(uid, question_count=0, consume=False):
-    """Central evaluation gate. UI remains accessible; only evaluation is gated."""
+def resolve_admin_role(uid, session=None):
+    """Single source of truth for admin identity.
+
+    Checks all three configured sources in priority order:
+      1. SUPER_ADMIN_TELEGRAM_ID   (env, single id)
+      2. ADMIN_TELEGRAM_IDS        (env, comma list)
+      3. admin_users table         (managed from the Admin Panel)
+    Returns 'super_admin', 'admin', or None. Every access gate uses this so
+    admin/super-admin status can never disagree between endpoints.
+    """
+    uid = str(uid)
+    if SUPER_ADMIN_TELEGRAM_ID and uid == str(SUPER_ADMIN_TELEGRAM_ID):
+        return "super_admin"
+    if uid in ADMIN_TELEGRAM_IDS:
+        return "admin"
     if not DB_ENABLED or SessionLocal is None:
-        return False, 'database_unavailable', None
-    s=SessionLocal()
+        return None
+    own = session is None
+    s = session or SessionLocal()
     try:
-        u=s.get(DBUser,str(uid))
-        if not u or u.is_blocked:
-            return False,'blocked',u
-        if SUPER_ADMIN_TELEGRAM_ID and str(uid)==str(SUPER_ADMIN_TELEGRAM_ID):
-            u.is_allowed=True; u.access_type='full'; s.commit()
-            return True,'full',u
-        admin_row = s.execute(__import__("sqlalchemy").text(
+        row = s.execute(__import__("sqlalchemy").text(
             "SELECT role,is_active FROM admin_users WHERE telegram_user_id=:uid LIMIT 1"
-        ), {"uid":str(uid)}).mappings().first()
-        if admin_row and admin_row["is_active"] and str(admin_row["role"]).lower() in ("admin","super_admin"):
-            u.is_allowed=True; u.access_type='full'; s.commit()
-            return True,'full',u
-        if u.is_allowed or u.access_type=='full':
-            return True,'full',u
-        if u.access_type=='trial':
-            if int(u.trial_copies_used or 0) >= int(u.trial_copies_limit or 3):
-                return False,'trial_copies_exhausted',u
-            if int(u.trial_questions_used or 0) >= int(u.trial_questions_limit or 10):
-                return False,'trial_questions_exhausted',u
-            if consume:
-                u.trial_copies_used=int(u.trial_copies_used or 0)+1
-                u.trial_questions_used += int(question_count or 0)
-                s.commit()
-            return True,'trial',u
-        # Authorized group membership is handled by the caller for Telegram.
-        return False,'not_authorized',u
+        ), {"uid": uid}).mappings().first()
+        if row and row["is_active"] and str(row["role"]).lower() in ("admin", "super_admin"):
+            return str(row["role"]).lower()
+        return None
     except Exception as e:
-        s.rollback(); print('EVALUATION ACCESS ERROR:',e); return False,'database_error',None
+        print("ADMIN ROLE LOOKUP ERROR:", e)
+        return None
+    finally:
+        if own:
+            s.close()
+
+
+def _trial_snapshot(u=None):
+    """Plain, session-independent view of trial counters (safe after close())."""
+    from types import SimpleNamespace
+    if u is None:
+        return SimpleNamespace(trial_copies_used=0, trial_copies_limit=3,
+                               trial_questions_used=0, trial_questions_limit=10)
+    return SimpleNamespace(
+        trial_copies_used=int(u.trial_copies_used or 0),
+        trial_copies_limit=int(u.trial_copies_limit or 3),
+        trial_questions_used=int(u.trial_questions_used or 0),
+        trial_questions_limit=int(u.trial_questions_limit or 10),
+    )
+
+
+def evaluation_access(uid, question_count=0, consume=False):
+    """Central evaluation gate. UI remains accessible; only evaluation is gated.
+
+    Returns (allowed: bool, source: str, trial: SimpleNamespace). The third value
+    is ALWAYS a plain snapshot (never a live ORM row), so callers can safely read
+    it after the session is closed. This removes the DetachedInstanceError class of
+    failures that produced the 503 on /api/app/auth for admin/super-admin users.
+    """
+    if not DB_ENABLED or SessionLocal is None:
+        return False, 'database_unavailable', _trial_snapshot()
+    s = SessionLocal()
+    try:
+        u = s.get(DBUser, str(uid))
+        # Admins/super-admins resolve first and are never locked out of evaluation.
+        role = resolve_admin_role(uid, session=s)
+        if role is not None:
+            if u is not None and (not u.is_allowed or u.access_type != 'full'):
+                u.is_allowed = True
+                u.access_type = 'full'
+                s.commit()
+            return True, 'full', _trial_snapshot(u)
+        if u is None or u.is_blocked:
+            return False, 'blocked' if (u and u.is_blocked) else 'not_authorized', _trial_snapshot(u)
+        if u.is_allowed or u.access_type == 'full':
+            return True, 'full', _trial_snapshot(u)
+        if u.access_type == 'trial':
+            snap = _trial_snapshot(u)
+            if snap.trial_copies_used >= snap.trial_copies_limit:
+                return False, 'trial_copies_exhausted', snap
+            if snap.trial_questions_used >= snap.trial_questions_limit:
+                return False, 'trial_questions_exhausted', snap
+            if consume:
+                u.trial_copies_used = snap.trial_copies_used + 1
+                u.trial_questions_used = snap.trial_questions_used + int(question_count or 0)
+                s.commit()
+                snap = _trial_snapshot(u)
+            return True, 'trial', snap
+        # Authorized group membership is handled by the caller for Telegram.
+        return False, 'not_authorized', _trial_snapshot(u)
+    except Exception as e:
+        s.rollback(); print('EVALUATION ACCESS ERROR:', e); return False, 'database_error', _trial_snapshot()
     finally:
         s.close()
 
@@ -4173,7 +4229,10 @@ if bot:
         ).start()
 
 
-    def _run_telegram_evaluation(message, item, paper, status):
+    def _run_telegram_evaluation(message, item, paper, status, source="trial"):
+            # chat_id and source were previously undefined free variables here,
+            # which crashed the background thread with NameError. Bind them locally.
+            chat_id = int(message.chat.id)
             try:
 
                 final_pdf, result = (
@@ -5253,36 +5312,63 @@ def current_app_uid(request: Request):
         return None
 
 
+# Telegram's production public key for the Ed25519 initData signature scheme.
+_TELEGRAM_WEBAPP_PUBLIC_KEY = bytes.fromhex(
+    "e7bf03a2fa4602af4580703d88dda5bb59f32ed8b02a56c187fe7d34caed242d"
+)
+
+
+def _tg_check_string(values, exclude_signature=False):
+    return "\n".join(
+        f"{k}={values[k][0]}"
+        for k in sorted(values)
+        if k != "hash" and not (exclude_signature and k == "signature")
+    )
+
+
 def telegram_webapp_validate(init_data: str):
-    """Validate Telegram Mini App initData according to Telegram's HMAC scheme."""
+    """Validate Telegram Mini App initData.
+
+    Accepts the standard HMAC-SHA256 scheme and falls back to Telegram's newer
+    Ed25519 signature scheme, so launches from different contexts (inline button,
+    menu button, direct link) all validate. Returns the user dict or None.
+    """
     if not BOT_TOKEN or not init_data:
         return None
     try:
-        values = parse_qs(init_data, keep_blank_values=True)
-        received_hash = values.pop("hash", [""])[0]
-        if not received_hash:
-            return None
+        values = parse_qs(str(init_data), keep_blank_values=True)
+        received_hash = values.get("hash", [""])[0]
+        received_sig = values.get("signature", [""])[0]
         auth_date = int(values.get("auth_date", ["0"])[0])
-        if not auth_date or abs(int(time.time()) - auth_date) > 86400:
-            return None
-        data_check_string = "\n".join(
-            f"{key}={values[key][0]}"
-            for key in sorted(values.keys())
-        )
-        secret_key = hmac.new(
-            b"WebAppData",
-            BOT_TOKEN.encode(),
-            hashlib.sha256
-        ).digest()
-        calculated = hmac.new(
-            secret_key,
-            data_check_string.encode(),
-            hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(calculated, received_hash):
-            return None
         user_raw = values.get("user", [""])[0]
-        user = json.loads(user_raw) if user_raw else {}
+        if not auth_date or not user_raw:
+            return None
+        age = int(time.time()) - auth_date
+        if age < -300 or age > 86400:
+            return None
+
+        # Primary: HMAC-SHA256 with the bot token.
+        check = _tg_check_string(values)
+        secret = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+        calc = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        valid = bool(received_hash) and hmac.compare_digest(calc, received_hash)
+
+        # Fallback: Ed25519 signature verification.
+        if not valid and received_sig:
+            try:
+                bot_id = BOT_TOKEN.split(":", 1)[0]
+                sig_check = f"{bot_id}:WebAppData\n" + _tg_check_string(values, True)
+                sig = base64.urlsafe_b64decode(received_sig + "=" * (-len(received_sig) % 4))
+                Ed25519PublicKey.from_public_bytes(_TELEGRAM_WEBAPP_PUBLIC_KEY).verify(
+                    sig, sig_check.encode()
+                )
+                valid = True
+            except Exception:
+                pass
+
+        if not valid:
+            return None
+        user = json.loads(user_raw)
         uid = str(user.get("id", ""))
         if not uid:
             return None
