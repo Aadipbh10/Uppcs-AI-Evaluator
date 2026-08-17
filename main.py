@@ -61,6 +61,32 @@ FONT_URL = (
     "ofl/kalam/Kalam-Regular.ttf"
 )
 
+# Noto Sans Devanagari — used ONLY on the summary/table page so Hindi renders
+# correctly (base PDF fonts lack Devanagari glyphs -> otherwise "????").
+NOTO_PATH = "/tmp/NotoSansDevanagari-Regular.ttf"
+
+NOTO_URL = (
+    "https://github.com/notofonts/devanagari/raw/main/"
+    "fonts/NotoSansDevanagari/hinted/ttf/NotoSansDevanagari-Regular.ttf"
+)
+
+
+def ensure_noto_font():
+    try:
+        if os.path.exists(NOTO_PATH) and os.path.getsize(NOTO_PATH) > 10000:
+            return True
+        r = requests.get(NOTO_URL, timeout=30)
+        r.raise_for_status()
+        with open(NOTO_PATH, "wb") as f:
+            f.write(r.content)
+        return os.path.getsize(NOTO_PATH) > 10000
+    except Exception as e:
+        print("NOTO FONT ERROR:", e)
+        return False
+
+
+ensure_noto_font()
+
 
 # ============================================================
 # TEMP STORAGE
@@ -3473,6 +3499,14 @@ def place_comment(
 def insert_evaluation_summary_page(pdf, result):
     """Insert the branded first page with Q-wise Intro/Body/Conclusion/Marks."""
     page = pdf.new_page(pno=0, width=595, height=842)
+    try:
+        if os.path.exists(NOTO_PATH):
+            page.insert_font(fontname="noto", fontfile=NOTO_PATH)
+            _hindi = "noto"
+        else:
+            _hindi = "helv"
+    except Exception:
+        _hindi = "helv"
     logo_path = STATIC_DIR / "branding" / "prana-logo.png" if 'STATIC_DIR' in globals() else None
     if logo_path and logo_path.exists():
         try: page.insert_image(fitz.Rect(42,22,78,58), filename=str(logo_path), overlay=True)
@@ -3492,7 +3526,7 @@ def insert_evaluation_summary_page(pdf, result):
         row_h=52
         for x,w,val in zip([x0,80,205,380,525],widths,vals):
             page.draw_rect(fitz.Rect(x,y,x+w,y+row_h), color=(0.65,0.67,0.70), width=0.5, overlay=True)
-            page.insert_textbox(fitz.Rect(x+3,y+4,x+w-3,y+row_h-4), val, fontsize=7.5, color=(0.10,0.11,0.13), align=1 if x in (x0,525) else 0, overlay=True)
+            page.insert_textbox(fitz.Rect(x+3,y+4,x+w-3,y+row_h-4), val, fontsize=7.5, fontname=_hindi, color=(0.10,0.11,0.13), align=1 if x in (x0,525) else 0, overlay=True)
         y+=row_h
         if y>690:
             page.insert_text((42,715), "See evaluated copy pages for detailed examiner comments and annotations.", fontsize=8, color=(0.35,0.35,0.35), overlay=True); break
@@ -3507,7 +3541,8 @@ def annotate_pdf(
     result
 ):
 
-    insert_evaluation_summary_page(pdf, result)
+    # Summary page is inserted AFTER annotation (see end of function) so it is
+    # never treated as an answer page -> Q1 comments no longer land on page 1.
     page_annotations = {}
 
     for annotation in result.get(
@@ -3866,6 +3901,8 @@ def annotate_pdf(
     # --------------------------------------------------------
     # SAVE
     # --------------------------------------------------------
+
+    insert_evaluation_summary_page(pdf, result)
 
     output = io.BytesIO()
 
