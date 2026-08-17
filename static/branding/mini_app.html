@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d12">
+<title>Prana PCS AI Evaluator</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:#0b0d12;--panel:#12151c;--panel2:#171b24;--line:#262c38;
+  --text:#f5f7fb;--muted:#98a1b2;--gold:#d7ad62;--gold2:#f1cf88;
+  --green:#58c596;--red:#ed7474;--blue:#77a8ff;--shadow:0 16px 50px rgba(0,0,0,.28);
+  --radius:20px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 85% -10%,rgba(215,173,98,.11),transparent 32%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input,select{font:inherit}
+button{cursor:pointer}
+.app{max-width:760px;margin:auto;min-height:100vh;padding:18px 16px 100px}
+.top{display:flex;align-items:center;justify-content:space-between;padding:8px 2px 20px}
+.brand{display:flex;align-items:center;gap:11px}.logo{width:42px;height:42px;border:1px solid rgba(215,173,98,.45);border-radius:14px;display:grid;place-items:center;background:linear-gradient(145deg,#1c1a17,#101218);font-weight:800;color:var(--gold)}
+.brand b{font-size:14px;letter-spacing:.8px}.brand span{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+.iconbtn{width:42px;height:42px;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--text)}
+.view{display:none}.view.active{display:block}
+.hero{padding:18px 2px 8px}.eyebrow{color:var(--gold);font-size:12px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase}.hero h1{font-size:30px;line-height:1.15;margin:8px 0}.hero p{color:var(--muted);margin:0;line-height:1.55}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:var(--radius);padding:17px;box-shadow:var(--shadow)}
+.stat{min-height:105px}.stat small,.label{color:var(--muted);font-size:12px}.stat strong{display:block;font-size:25px;margin-top:9px}
+.section{margin-top:18px}.sectionhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}.sectionhead h2{font-size:16px;margin:0}.link{border:0;background:none;color:var(--gold2);font-size:12px}
+.btn{border:0;border-radius:15px;padding:13px 16px;font-weight:700}.primary{background:linear-gradient(135deg,var(--gold2),var(--gold));color:#16130d}.secondary{background:var(--panel2);border:1px solid var(--line);color:var(--text)}.danger{color:var(--red)}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.action{padding:17px;text-align:left}.action b{display:block;margin-bottom:5px}.action span{font-size:12px;color:var(--muted)}
+.status{display:flex;align-items:center;justify-content:space-between;gap:10px}.badge{padding:7px 10px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.5px}.full{background:rgba(88,197,150,.12);color:var(--green)}.trial{background:rgba(215,173,98,.12);color:var(--gold2)}.denied{background:rgba(237,116,116,.1);color:var(--red)}
+.progress{height:7px;background:#252a34;border-radius:99px;overflow:hidden;margin-top:12px}.progress i{display:block;height:100%;background:linear-gradient(90deg,var(--gold),var(--gold2));border-radius:inherit}
+.form{display:grid;gap:13px}.field{display:grid;gap:7px}.field label{font-size:12px;color:var(--muted);font-weight:650}.input,.select{width:100%;padding:13px 14px;border-radius:14px;border:1px solid var(--line);background:#0f1218;color:var(--text);outline:none}.input:focus,.select:focus{border-color:rgba(215,173,98,.65)}
+.upload{border:1px dashed #3a4150;border-radius:18px;padding:24px;text-align:center;background:#10131a}.upload b{display:block;margin-bottom:6px}.upload span{color:var(--muted);font-size:12px}.upload input{display:none}
+.filelist{margin-top:10px;color:var(--muted);font-size:12px;line-height:1.6}
+.note{padding:13px 14px;border:1px solid rgba(215,173,98,.2);background:rgba(215,173,98,.06);border-radius:15px;color:#d8dce5;font-size:12px;line-height:1.5}
+.selectbox{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;border:1px solid var(--line);background:var(--panel);border-radius:15px;text-align:left;color:var(--text);width:100%}.selectbox span:last-child{color:var(--muted)}
+.list{display:grid;gap:10px}.row{padding:14px;border:1px solid var(--line);background:var(--panel);border-radius:16px}.rowtop{display:flex;justify-content:space-between;gap:10px}.row b{font-size:13px}.row small{color:var(--muted);font-size:11px}.score{font-weight:800;color:var(--gold2)}
+.empty{text-align:center;color:var(--muted);padding:35px 15px}
+.bottom{position:fixed;left:50%;bottom:12px;transform:translateX(-50%);width:min(728px,calc(100% - 24px));background:rgba(18,21,28,.92);backdrop-filter:blur(18px);border:1px solid var(--line);border-radius:20px;padding:7px;display:grid;grid-template-columns:repeat(5,1fr);z-index:20;box-shadow:var(--shadow)}
+.nav{border:0;background:none;color:var(--muted);padding:9px 3px;border-radius:14px;font-size:10px}.nav.active{background:#20242d;color:var(--gold2);font-weight:800}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.65);display:none;align-items:flex-end;justify-content:center;z-index:50}.modal.show{display:flex}.sheet{width:min(760px,100%);background:#11141b;border:1px solid var(--line);border-radius:24px 24px 0 0;padding:18px;max-height:78vh;overflow:auto}.sheethead{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.sheet h3{margin:0;font-size:17px}.options{display:grid;gap:8px}.option{border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:14px;padding:14px;text-align:left}.option.selected{border-color:var(--gold);color:var(--gold2)}
+.spinner{width:34px;height:34px;border:3px solid #303641;border-top-color:var(--gold);border-radius:50%;animation:spin .8s linear infinite;margin:auto}@keyframes spin{to{transform:rotate(360deg)}}
+.toast{position:fixed;left:50%;top:18px;transform:translate(-50%,-20px);opacity:0;background:#20242c;border:1px solid var(--line);color:#fff;padding:11px 15px;border-radius:13px;font-size:12px;z-index:80;transition:.25s}.toast.show{opacity:1;transform:translate(-50%,0)}
+@media(max-width:430px){.app{padding-left:13px;padding-right:13px}.grid{gap:9px}.card{padding:14px}.hero h1{font-size:27px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand"><div class="logo">P</div><div><b>PRANA PCS</b><span>AI MAINS EVALUATOR</span></div></div>
+    <button class="iconbtn" id="langBtn" onclick="toggleLang()" aria-label="Language">EN</button>
+  </header>
+
+  <main>
+    <section id="home" class="view active">
+      <div class="hero"><div class="eyebrow" data-en="AI-Powered Mains Evaluation" data-hi="AI आधारित मेन्स मूल्यांकन"></div><h1 id="welcome">Welcome</h1><p data-en="Evaluate your answer copies with paper-specific AI assessment." data-hi="अपने उत्तरों का पेपर-विशिष्ट AI मूल्यांकन करें।"></p></div>
+      <div class="card section">
+        <div class="status"><div><div class="label" data-en="Evaluation Access" data-hi="मूल्यांकन एक्सेस"></div><div id="accessText" class="label" style="margin-top:6px"></div></div><span id="accessBadge" class="badge denied">CHECKING</span></div>
+        <div class="progress"><i id="trialBar" style="width:0%"></i></div>
+        <button id="trialBtn" class="btn primary" style="width:100%;margin-top:12px;display:none" onclick="startTrial()"></button>
+      </div>
+      <div class="grid section">
+        <div class="card stat"><small data-en="Evaluations" data-hi="मूल्यांकन"></small><strong id="statEval">0</strong></div>
+        <div class="card stat"><small data-en="Average Score" data-hi="औसत स्कोर"></small><strong id="statAvg">0%</strong></div>
+      </div>
+      <div class="section"><div class="sectionhead"><h2 data-en="Quick Actions" data-hi="त्वरित विकल्प"></h2></div><div class="actions">
+        <button class="card action" onclick="showView('evaluate')"><b data-en="Evaluate My Copy" data-hi="मेरी कॉपी का मूल्यांकन"></b><span data-en="Upload PDF or images" data-hi="PDF या इमेज अपलोड करें"></span></button>
+        <button class="card action" onclick="showView('performance')"><b data-en="Paper-wise Performance" data-hi="पेपर-वार प्रदर्शन"></b><span data-en="Track your progress" data-hi="अपनी प्रगति देखें"></span></button>
+        <button class="card action" onclick="showView('history')"><b data-en="Evaluation History" data-hi="मूल्यांकन इतिहास"></b><span data-en="View previous copies" data-hi="पिछली कॉपियाँ देखें"></span></button>
+        <button class="card action" onclick="showView('daily')"><b data-en="Daily Questions" data-hi="दैनिक प्रश्न"></b><span data-en="Questions and model answers" data-hi="प्रश्न और मॉडल उत्तर"></span></button>
+      </div></div>
+      <div class="section card"><div class="sectionhead"><h2 data-en="Recent Evaluations" data-hi="हाल के मूल्यांकन"></h2><button class="link" onclick="showView('history')" data-en="View all" data-hi="सभी देखें"></button></div><div id="recent" class="list"></div></div>
+    </section>
+
+    <section id="evaluate" class="view">
+      <div class="hero"><div class="eyebrow" data-en="Evaluate My Copy" data-hi="मेरी कॉपी का मूल्यांकन"></div><h1 data-en="Professional AI Assessment" data-hi="प्रोफेशनल AI मूल्यांकन"></h1><p data-en="Copy language and marking will be detected and assessed automatically." data-hi="कॉपी की भाषा और मार्किंग AI स्वतः पहचानकर मूल्यांकन करेगा।"></p></div>
+      <div class="form">
+        <div class="field"><label data-en="Exam" data-hi="परीक्षा"></label><button class="selectbox" onclick="openSelect('exam')"><span id="examValue">UPPCS</span><span>⌄</span></button></div>
+        <div class="field"><label data-en="Paper" data-hi="पेपर"></label><button class="selectbox" onclick="openSelect('paper')"><span id="paperValue">GS-I</span><span>⌄</span></button></div>
+        <div class="field"><label data-en="Evaluation Type" data-hi="मूल्यांकन प्रकार"></label><button class="selectbox" onclick="openSelect('type')"><span id="typeValue">General Evaluation</span><span>⌄</span></button></div>
+        <div class="note"><b data-en="Copy Language & Marking" data-hi="कॉपी की भाषा और मार्किंग"></b><br><span data-en="AI will detect the language of the answer copy and assess it in that language." data-hi="AI उत्तर की भाषा स्वतः पहचानेगा और उसी भाषा में मूल्यांकन करेगा।"></span><br><span data-en="General Hindi is always evaluated in Hindi." data-hi="सामान्य हिंदी का मूल्यांकन हमेशा हिंदी में होगा।"></span></div>
+        <label class="upload"><b data-en="Upload Answer Copy" data-hi="उत्तर कॉपी अपलोड करें"></b><span data-en="PDF or JPG, JPEG, PNG, WEBP • up to 20 MB" data-hi="PDF या JPG, JPEG, PNG, WEBP • अधिकतम 20 MB"></span><input id="copyFiles" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" multiple onchange="filesChanged()"><div id="fileList" class="filelist" data-en="Tap to select your copy" data-hi="कॉपी चुनने के लिए टैप करें"></div></label>
+        <button class="btn primary" id="evaluateBtn" onclick="submitEvaluation()" data-en="Evaluate My Copy" data-hi="मेरी कॉपी का मूल्यांकन करें"></button>
+      </div>
+    </section>
+
+    <section id="performance" class="view">
+      <div class="hero"><div class="eyebrow" data-en="Performance" data-hi="प्रदर्शन"></div><h1 data-en="Paper-wise Performance" data-hi="पेपर-वार प्रदर्शन"></h1><p data-en="Select a paper to see your performance so far." data-hi="किसी पेपर का चयन करके अब तक का प्रदर्शन देखें।"></p></div>
+      <button class="selectbox" onclick="openSelect('perfPaper')"><span id="perfPaperValue">All Papers</span><span>⌄</span></button>
+      <div class="grid section"><div class="card stat"><small data-en="Average" data-hi="औसत"></small><strong id="perfPct">0%</strong></div><div class="card stat"><small data-en="Evaluations" data-hi="मूल्यांकन"></small><strong id="perfCount">0</strong></div></div>
+      <div class="section card"><div class="sectionhead"><h2 data-en="Strengths" data-hi="मजबूत पक्ष"></h2></div><div id="strengths" class="list"></div></div>
+      <div class="section card"><div class="sectionhead"><h2 data-en="Areas to Improve" data-hi="सुधार के क्षेत्र"></h2></div><div id="mistakes" class="list"></div></div>
+    </section>
+
+    <section id="history" class="view">
+      <div class="hero"><div class="eyebrow" data-en="History" data-hi="इतिहास"></div><h1 data-en="Evaluation History" data-hi="मूल्यांकन इतिहास"></h1></div>
+      <div class="grid"><button class="selectbox" onclick="openSelect('histExam')"><span id="histExamValue">All Exams</span><span>⌄</span></button><button class="selectbox" onclick="openSelect('histPaper')"><span id="histPaperValue">All Papers</span><span>⌄</span></button></div>
+      <div class="section"><div id="historyList" class="list"></div></div>
+    </section>
+
+    <section id="daily" class="view">
+      <div class="hero"><div class="eyebrow" data-en="Daily Questions & Model Answers" data-hi="दैनिक प्रश्न एवं मॉडल उत्तर"></div><h1 data-en="Practice Daily" data-hi="दैनिक अभ्यास"></h1></div>
+      <div class="grid"><div class="field"><label data-en="Date" data-hi="तिथि"></label><input class="input" id="dailyDate" type="date" onchange="loadDaily()"></div><div class="field"><label data-en="Paper" data-hi="पेपर"></label><button class="selectbox" onclick="openSelect('dailyPaper')"><span id="dailyPaperValue">All Papers</span><span>⌄</span></button></div></div>
+      <div class="section"><div id="dailyList" class="list"></div></div>
+    </section>
+
+    <section id="result" class="view">
+      <div class="hero"><div class="eyebrow" data-en="Evaluation Result" data-hi="मूल्यांकन परिणाम"></div><h1 id="resultTitle">Evaluation</h1><p id="resultMeta"></p></div>
+      <div class="grid"><div class="card stat"><small data-en="Score" data-hi="स्कोर"></small><strong id="resultScore">—</strong></div><div class="card stat"><small data-en="Percentage" data-hi="प्रतिशत"></small><strong id="resultPct">—</strong></div></div>
+      <div class="section card"><div class="sectionhead"><h2 data-en="Overall Feedback" data-hi="समग्र प्रतिक्रिया"></h2></div><p id="resultFeedback" style="color:#cfd5df;line-height:1.65"></p></div>
+      <div class="section card"><div class="sectionhead"><h2 data-en="Question-wise Performance" data-hi="प्रश्न-वार प्रदर्शन"></h2></div><div id="resultQuestions" class="list"></div></div>
+      <div class="section" style="display:grid;gap:10px"><button class="btn primary" onclick="openPDF()" data-en="Open Evaluated PDF" data-hi="मूल्यांकित PDF खोलें"></button><button class="btn secondary" onclick="sendPDF()" data-en="Send Copy on Telegram" data-hi="कॉपी Telegram पर भेजें"></button></div>
+    </section>
+  </main>
+</div>
+
+<nav class="bottom">
+  <button class="nav active" data-view="home" onclick="showView('home')" data-en="Home" data-hi="होम"></button>
+  <button class="nav" data-view="performance" onclick="showView('performance')" data-en="Performance" data-hi="प्रदर्शन"></button>
+  <button class="nav" data-view="evaluate" onclick="showView('evaluate')" data-en="Evaluate" data-hi="मूल्यांकन"></button>
+  <button class="nav" data-view="history" onclick="showView('history')" data-en="History" data-hi="इतिहास"></button>
+  <button class="nav" data-view="daily" onclick="showView('daily')" data-en="Daily" data-hi="दैनिक"></button>
+</nav>
+
+<div id="modal" class="modal" onclick="if(event.target===this)closeModal()"><div class="sheet"><div class="sheethead"><h3 id="modalTitle">Select</h3><button class="iconbtn" onclick="closeModal()">×</button></div><div id="modalOptions" class="options"></div></div></div>
+<div id="toast" class="toast"></div>
+
+<script>
+const tg=window.Telegram?.WebApp;
+if(tg){tg.ready();tg.expand();}
+const state={
+ lang:'en', user:null, catalog:{}, contentCatalog:[], currentSubmission:null,
+ selections:{exam:'UPPCS',paper:'GS1',type:'GENERAL',perfPaper:'',histExam:'',histPaper:'',dailyPaper:''}
+};
+const papers=[['','All Papers'],['GS1','GS-I'],['GS2','GS-II'],['GS3','GS-III'],['GS4','GS-IV'],['GS5','GS-V'],['GS6','GS-VI'],['GENERAL_HINDI','General Hindi'],['ESSAY','Essay']];
+const exams=[['','All Exams'],['UPPCS','UPPCS'],['BPSC','BPSC'],['RO_ARO','RO/ARO'],['BEO','BEO']];
+const types=[['GENERAL','General Evaluation'],['PYQ','PYQ'],['DAILY','Daily Question'],['GROUP','Group Evaluation']];
+const $=id=>document.getElementById(id);
+function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
+function toast(s){$('toast').textContent=s;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2800);}
+function tr(el){const x=el.dataset?.[state.lang];if(x)el.textContent=x;}
+function applyLang(){document.documentElement.lang=state.lang;document.querySelectorAll('[data-en],[data-hi]').forEach(tr);$('langBtn').textContent=state.lang==='en'?'हिं':'EN';}
+function toggleLang(){state.lang=state.lang==='en'?'hi':'en';applyLang();}
+function showView(id){
+ document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id===id));
+ document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.view===id));
+ if(id==='performance')loadPerformance(); if(id==='history')loadHistory(); if(id==='daily')loadDaily();
+ if(id==='evaluate')loadCatalogs();
+ window.scrollTo({top:0,behavior:'smooth'});
+}
+function openSelect(kind){
+ const title={exam:'Select Exam',paper:'Select Paper',type:'Select Evaluation Type',perfPaper:'Select Paper',histExam:'Select Exam',histPaper:'Select Paper',dailyPaper:'Select Paper'}[kind];
+ let opts=kind==='exam'?exams:kind==='paper'?papers:kind==='type'?types:papers;
+ $('modalTitle').textContent=state.lang==='hi'?'चयन करें':title;
+ $('modalOptions').innerHTML=opts.map(([id,label])=>`<button class="option ${state.selections[kind]===id?'selected':''}" onclick="choose('${kind}','${id}')">${esc(label)}</button>`).join('');
+ $('modal').classList.add('show');
+}
+function choose(kind,id){
+ state.selections[kind]=id;
+ const labels={exam:Object.fromEntries(exams),paper:Object.fromEntries(papers),type:Object.fromEntries(types),perfPaper:Object.fromEntries(papers),histExam:Object.fromEntries(exams),histPaper:Object.fromEntries(papers),dailyPaper:Object.fromEntries(papers)};
+ const target={exam:'examValue',paper:'paperValue',type:'typeValue',perfPaper:'perfPaperValue',histExam:'histExamValue',histPaper:'histPaperValue',dailyPaper:'dailyPaperValue'}[kind];
+ $(target).textContent=labels[kind][id]||id;
+ closeModal();
+ if(kind==='paper' && id==='GENERAL_HINDI'){}
+ if(kind==='perfPaper')loadPerformance();
+ if(kind==='histExam'||kind==='histPaper')loadHistory();
+ if(kind==='dailyPaper')loadDaily();
+}
+function closeModal(){$('modal').classList.remove('show')}
+async function api(url,opt={}){
+ const r=await fetch(url,{credentials:'include',...opt});
+ let d={};try{d=await r.json()}catch{}
+ if(!r.ok)throw Error(d.error||d.message||`Request failed (${r.status})`);
+ return d;
+}
+async function auth(){
+ if(!tg?.initData){toast('Open the Mini App from Telegram.');return false}
+ try{
+  const d=await api('/api/app/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData})});
+  state.user=d.user||{};state.user.evaluation_access=d.evaluation_access;state.user.evaluation_access_source=d.evaluation_access_source;
+  state.user.trial_copies_used=d.trial_copies_used;state.user.trial_copies_limit=d.trial_copies_limit;
+  state.user.trial_questions_used=d.trial_questions_used;state.user.trial_questions_limit=d.trial_questions_limit;
+  return true;
+ }catch(e){toast(e.message);return false}
+}
+function updateAccess(){
+ const u=state.user||{};const full=!!u.evaluation_access&&u.evaluation_access_source!=='trial';const trial=u.evaluation_access_source==='trial';
+ $('accessBadge').textContent=full?'FULL ACCESS':trial?'TRIAL':'NO ACCESS';
+ $('accessBadge').className='badge '+(full?'full':trial?'trial':'denied');
+ if(full){$('accessText').textContent=state.lang==='hi'?'पूर्ण मूल्यांकन एक्सेस उपलब्ध है।':'Full evaluation access is enabled.';$('trialBtn').style.display='none';$('trialBar').style.width='100%';}
+ else if(trial){
+  const c=Math.max(0,(u.trial_copies_limit||3)-(u.trial_copies_used||0)),q=Math.max(0,(u.trial_questions_limit||10)-(u.trial_questions_used||0));
+  $('accessText').textContent=state.lang==='hi'?`ट्रायल — ${c} कॉपी / ${q} प्रश्न शेष`:`Trial — ${c} Copies / ${q} Questions remaining`;
+  $('trialBtn').style.display='none';$('trialBar').style.width=`${Math.min(100,(c/(u.trial_copies_limit||3))*100)}%`;
+ }else{
+  $('accessText').textContent=state.lang==='hi'?'मूल्यांकन एक्सेस उपलब्ध नहीं है।':'Evaluation access is not active.';
+  $('trialBtn').style.display='block';$('trialBtn').textContent=state.lang==='hi'?'ट्रायल शुरू करें':'Let’s Trial';$('trialBar').style.width='0%';
+ }
+}
+async function startTrial(){
+ try{const d=await api('/api/app/start-trial',{method:'POST'});state.user.access_type=d.access_type;state.user.evaluation_access=true;state.user.evaluation_access_source='trial';state.user.trial_copies_used=d.trial_copies_used;state.user.trial_questions_used=d.trial_questions_used;updateAccess();toast(state.lang==='hi'?'ट्रायल शुरू हो गया।':'Trial started.');}
+ catch(e){toast(e.message)}
+}
+async function loadDashboard(){
+ try{const d=await api('/api/app/dashboard');state.user={...state.user,...(d.user||{})};$('statEval').textContent=d.recent?.length?d.recent.length:(Object.values(d.paper_stats||{}).reduce((a,x)=>a+x.submissions,0)||0);let total=0,max=0;Object.values(d.paper_stats||{}).forEach(x=>{total+=x.obtained;max+=x.max});$('statAvg').textContent=(max?((total/max)*100).toFixed(1):'0')+'%';renderRecent(d.recent||[]);updateAccess();}
+ catch(e){console.warn(e)}
+}
+function renderRecent(items){$('recent').innerHTML=items.length?items.map(x=>`<div class="row" onclick="openResult('${esc(x.id)}')"><div class="rowtop"><b>${esc(x.paper)} · ${esc(x.exam||'UPPCS')}</b><span class="score">${x.obtained??0}/${x.max??0}</span></div><small>${fmt(x.created_at)} · ${esc(x.language||'Auto')}</small></div>`).join(''):`<div class="empty">${state.lang==='hi'?'अभी कोई मूल्यांकन नहीं है।':'No evaluations yet.'}</div>`}
+function fmt(x){if(!x)return '—';try{return new Date(x).toLocaleDateString(state.lang==='hi'?'hi-IN':'en-IN',{day:'2-digit',month:'short',year:'numeric'})}catch{return x}}
+async function loadCatalogs(){try{state.catalog=await api('/api/evaluation/catalog');}catch{}}
+function filesChanged(){const f=[...$('copyFiles').files];$('fileList').textContent=f.length?f.map(x=>x.name).join(' • '):(state.lang==='hi'?'कॉपी चुनने के लिए टैप करें':'Tap to select your copy')}
+$('copyFiles').closest('.upload').addEventListener('click',e=>{if(e.target.tagName!=='INPUT')$('copyFiles').click()});
+async function submitEvaluation(){
+ const files=[...$('copyFiles').files];if(!files.length)return toast(state.lang==='hi'?'कॉपी अपलोड करें।':'Upload your answer copy.');
+ const paper=state.selections.paper; if(!paper)return toast(state.lang==='hi'?'पेपर चुनें।':'Select a paper.');
+ const type=state.selections.type;
+ const form=new FormData();files.forEach(f=>form.append('files',f));
+ $('evaluateBtn').disabled=true;$('evaluateBtn').textContent=state.lang==='hi'?'प्रोसेसिंग शुरू हो रही है…':'Starting evaluation…';
+ try{
+  const d=await api(`/api/app/evaluate?exam=${encodeURIComponent(state.selections.exam)}&evaluation_type=${encodeURIComponent(type)}${type!=='GENERAL'?'&source_id='+encodeURIComponent(getSourceId()||''):''}`,{method:'POST',body:form});
+  state.currentSubmission=d.submission_id;showView('result');await pollStatus(d.submission_id);
+ }catch(e){toast(e.message)}finally{$('evaluateBtn').disabled=false;applyLang();}
+}
+function getSourceId(){return null}
+async function pollStatus(id){
+ $('resultTitle').textContent=state.lang==='hi'?'मूल्यांकन चल रहा है…':'Evaluation in progress…';
+ $('resultMeta').textContent=state.lang==='hi'?'AI आपकी कॉपी का मूल्यांकन कर रहा है।':'AI is evaluating your copy.';
+ $('resultFeedback').innerHTML='<div class="spinner"></div>';
+ for(let i=0;i<90;i++){
+  try{const d=await api('/api/app/evaluation-status/'+encodeURIComponent(id));if(d.status==='completed'){await openResult(id);return}if(d.status==='failed'){throw Error('Evaluation failed.')} }catch(e){toast(e.message);return}
+  await new Promise(r=>setTimeout(r,4000));
+ }
+ toast(state.lang==='hi'?'मूल्यांकन में अपेक्षा से अधिक समय लग रहा है।':'Evaluation is taking longer than expected.');
+}
+async function openResult(id){
+ try{const d=await api('/api/app/evaluations/'+encodeURIComponent(id));state.currentSubmission=id;const s=d.submission||{};$('resultTitle').textContent=`${s.paper||''} Evaluation`;$('resultMeta').textContent=`${fmt(s.created_at)} · ${esc(s.language||'Auto')}`;$('resultScore').textContent=`${s.obtained??0}/${s.max??0}`;$('resultPct').textContent=`${s.percentage??0}%`;$('resultFeedback').textContent=s.feedback||'—';$('resultQuestions').innerHTML=(d.questions||[]).map(q=>`<div class="row"><div class="rowtop"><b>Q${q.number}</b><span class="score">${q.obtained}/${q.max}</span></div><small>Pages ${q.start_page}-${q.end_page}</small><div style="margin-top:8px;color:#cfd5df;font-size:12px;line-height:1.55">${esc(q.comment||q.body_comment||q.intro_comment||'')}</div></div>`).join('')||'<div class="empty">No question-wise data.</div>';showView('result');}
+ catch(e){toast(e.message)}
+}
+function openPDF(){if(state.currentSubmission)window.open('/api/app/evaluations/'+encodeURIComponent(state.currentSubmission)+'/pdf','_blank')}
+async function sendPDF(){if(!state.currentSubmission)return;try{await api('/api/app/evaluations/'+encodeURIComponent(state.currentSubmission)+'/send-to-telegram',{method:'POST'});toast(state.lang==='hi'?'Telegram पर भेज दिया गया।':'Sent to Telegram.')}catch(e){toast(e.message)}}
+async function loadPerformance(){
+ try{const d=await api('/api/app/performance?paper='+encodeURIComponent(state.selections.perfPaper));$('perfPct').textContent=(d.percentage??0)+'%';$('perfCount').textContent=d.submissions??0;$('strengths').innerHTML=(d.strengths||[]).map(x=>`<div class="row"><small>${esc(x)}</small></div>`).join('')||'<div class="empty">—</div>';$('mistakes').innerHTML=(d.mistakes||[]).map(x=>`<div class="row"><small>${esc(x)}</small></div>`).join('')||'<div class="empty">—</div>';}catch(e){toast(e.message)}
+}
+async function loadHistory(){
+ try{const p=state.selections.histPaper,e=state.selections.histExam;const d=await api(`/api/app/evaluations?paper=${encodeURIComponent(p)}&exam=${encodeURIComponent(e)}&limit=100`);$('historyList').innerHTML=(d.items||[]).map(x=>`<div class="row" onclick="openResult('${esc(x.id)}')"><div class="rowtop"><b>${esc(x.paper)} · ${esc(x.filename||'Copy')}</b><span class="score">${x.obtained}/${x.max}</span></div><small>${fmt(x.created_at)} · ${x.percentage}% · ${esc(x.language||'Auto')}</small></div>`).join('')||`<div class="empty">${state.lang==='hi'?'कोई इतिहास उपलब्ध नहीं है।':'No evaluation history.'}</div>`;}catch(e){toast(e.message)}
+}
+async function loadDaily(){
+ const date=$('dailyDate').value||'';const paper=state.selections.dailyPaper||'';try{const d=await api(`/api/app/daily?language=${state.lang==='hi'?'Hindi':'English'}&content_date=${encodeURIComponent(date)}&paper=${encodeURIComponent(paper)}`);$('dailyList').innerHTML=(d.items||[]).map(x=>`<article class="row"><div class="rowtop"><b>Q${x.question_number} · ${esc(x.paper)}</b><small>${esc(x.content_date||'')}</small></div><div style="margin-top:10px;line-height:1.65">${x.question}</div><details style="margin-top:10px"><summary style="color:var(--gold2);cursor:pointer">${state.lang==='hi'?'मॉडल उत्तर':'Model Answer'}</summary><div style="margin-top:10px;line-height:1.7;color:#cfd5df">${x.model_answer||'—'}</div></details></article>`).join('')||`<div class="empty">${state.lang==='hi'?'इस चयन के लिए कोई प्रश्न उपलब्ध नहीं है।':'No questions available for this selection.'}</div>`;}catch(e){toast(e.message)}
+}
+(async()=>{applyLang();if(await auth()){const u=state.user||{};$('welcome').textContent=state.lang==='hi'?`नमस्ते ${u.first_name||u.username||'Student'}`:`Welcome ${u.first_name||u.username||'Student'}`;await loadDashboard();await loadCatalogs();$('dailyDate').value=new Date().toISOString().slice(0,10);}})();
+</script>
+</body>
+</html>
